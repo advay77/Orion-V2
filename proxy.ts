@@ -56,7 +56,7 @@ if (typeof globalThis !== 'undefined') {
   }, WINDOW_MS);
 }
 
-export function middleware(request: NextRequest) {
+export default function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Only rate-limit the execute endpoint (the expensive one)
