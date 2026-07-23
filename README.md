@@ -27,11 +27,14 @@ Open [http://localhost:3000](http://localhost:3000), enter an objective, choose 
 Optional model overrides:
 
 ```env
-PLANNER_MODEL=deepseek/deepseek-chat-v3.1:free
-ENGINEERING_MODEL=qwen/qwen3-coder:free
-RESEARCH_MODEL=deepseek/deepseek-r1:free
-MARKETING_MODEL=qwen/qwen3.6-plus:free
+PLANNER_MODEL=deepseek/deepseek-chat
+ENGINEERING_MODEL=deepseek/deepseek-chat
+RESEARCH_MODEL=google/gemini-2.5-flash
+MARKETING_MODEL=google/gemini-2.5-flash
 ```
+
+Use `priority=quality` in the UI to escalate research to `deepseek/deepseek-r1` / Claude Sonnet.
+Do **not** set retired `:free` slugs (they 404 on OpenRouter).
 
 ## How it works
 

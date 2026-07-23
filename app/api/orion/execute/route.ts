@@ -1,65 +1,58 @@
+import { z } from 'zod';
 import { createOrionSystem, ArtifactEngine, VirtualFileSystem } from '@/lib/orion';
 import { NextRequest } from 'next/server';
 
-// Mark as Edge-incompatible (uses Node APIs in OpenAI SDK)
 export const runtime = 'nodejs';
-// Disable Next.js body size limit for long streams
-export const maxDuration = 300; // 5 minutes max for complex plans
+export const maxDuration = 300;
 
-// ─── Input validation ────────────────────────────────────────────────────────
+const ExecuteBodySchema = z.object({
+  objective: z
+    .string()
+    .trim()
+    .min(10, 'objective must be at least 10 characters')
+    .max(3000, 'objective must be under 3000 characters'),
+  priority: z.enum(['speed', 'quality', 'cost', 'balanced']).default('balanced'),
+});
 
-const MIN_OBJECTIVE_LENGTH = 10;
-const MAX_OBJECTIVE_LENGTH = 3000;
-
-function validateObjective(objective: unknown): { valid: boolean; error?: string } {
-  if (!objective || typeof objective !== 'string') {
-    return { valid: false, error: 'objective must be a non-empty string' };
-  }
-  if (objective.trim().length < MIN_OBJECTIVE_LENGTH) {
-    return { valid: false, error: `objective must be at least ${MIN_OBJECTIVE_LENGTH} characters` };
-  }
-  if (objective.length > MAX_OBJECTIVE_LENGTH) {
-    return { valid: false, error: `objective must be under ${MAX_OBJECTIVE_LENGTH} characters` };
-  }
-  return { valid: true };
+function jsonError(status: number, error: string, code: string, retryAfter?: number) {
+  const body: Record<string, unknown> = { error, code };
+  if (retryAfter != null) body.retryAfter = retryAfter;
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(retryAfter != null ? { 'Retry-After': String(retryAfter) } : {}),
+    },
+  });
 }
-
-// ─── SSE Helpers ─────────────────────────────────────────────────────────────
 
 function encodeSSE(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
-// ─── Route Handler ────────────────────────────────────────────────────────────
+function looksLikePathedCode(resultStr: string): boolean {
+  return (
+    /```[\w+#.-]*\s+(?:path|file)\s*=/.test(resultStr) ||
+    /```[\w./-]+\.[a-zA-Z0-9]+/.test(resultStr)
+  );
+}
 
 export async function POST(request: NextRequest) {
-  let body: { objective?: unknown; priority?: unknown };
+  let raw: unknown;
   try {
-    body = await request.json();
+    raw = await request.json();
   } catch {
-    return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return jsonError(400, 'Invalid JSON body', 'INVALID_JSON');
   }
 
-  const { objective, priority = 'balanced' } = body;
-
-  // Validate objective
-  const validation = validateObjective(objective);
-  if (!validation.valid) {
-    return new Response(JSON.stringify({ error: validation.error }), {
-      status: 422,
-      headers: { 'Content-Type': 'application/json' },
-    });
+  const parsed = ExecuteBodySchema.safeParse(raw);
+  if (!parsed.success) {
+    const msg = parsed.error.issues[0]?.message || 'Invalid request body';
+    return jsonError(422, msg, 'VALIDATION_ERROR');
   }
 
-  const safeObjective = (objective as string).trim();
-  const safePriority = ['speed', 'quality', 'cost', 'balanced'].includes(priority as string)
-    ? (priority as 'speed' | 'quality' | 'cost' | 'balanced')
-    : 'balanced';
+  const { objective: safeObjective, priority: safePriority } = parsed.data;
 
-  // ─── SSE Stream ─────────────────────────────────────────────────────────────
   const stream = new TransformStream<Uint8Array, Uint8Array>();
   const writer = stream.writable.getWriter();
   const encoder = new TextEncoder();
@@ -68,63 +61,52 @@ export async function POST(request: NextRequest) {
     try {
       await writer.write(encoder.encode(encodeSSE(event, data)));
     } catch {
-      // Client disconnected — ignore
+      // client disconnected
     }
   };
 
-  // Run the plan in the background; stream events as they arrive
   (async () => {
     try {
-      // Create a fresh Orchestrator per request (no singleton = no cross-request contamination)
       const orion = createOrionSystem();
       const artifactEngine = new ArtifactEngine();
 
-      // Wire up SSE events from Orchestrator callbacks
       orion.onExecutionUpdate(async (status: string, data: unknown) => {
         await write(status, data);
       });
 
       await write('connected', { message: 'Orion AI stream connected', objective: safeObjective });
 
-      // Execute plan — this will emit events via onExecutionUpdate
       const plan = await orion.executePlan(safeObjective, safePriority);
       const executionState = orion.getExecutionState();
       const summary = orion.getPlanSummary();
       const memory = orion.getSharedMemory();
-
-      // Get task execution logs
       const taskLogs = (memory as any).taskExecutionLog || [];
 
-      // Build artifacts primarily from engineering output (research/marketing
-      // prose used to pollute the VFS with random pathless "files").
-      const engineResults: any[] = [];
-      const taskResults: Record<string, any> = {};
+      const engineResults: ReturnType<ArtifactEngine['process']>[] = [];
+      const taskResults: Record<string, unknown> = {};
+      const warnings: string[] = [];
 
-      const artifactTasks = [
-        ...plan.tasks.filter((t) => t.assignedTo === 'engineering' && t.result),
-        // Fallback: if planner somehow skipped engineering, still try any coded result
-        ...plan.tasks.filter((t) => t.assignedTo !== 'engineering' && t.result),
-      ];
+      if (memory.research_degraded_note) {
+        warnings.push(String(memory.research_degraded_note));
+      }
 
-      const seenTaskIds = new Set<string>();
-      for (const task of artifactTasks) {
-        if (seenTaskIds.has(task.id)) continue;
-        seenTaskIds.add(task.id);
-
+      for (const task of plan.tasks) {
+        if (!task.result) continue;
         const resultStr =
           typeof task.result === 'string' ? task.result : JSON.stringify(task.result);
-        const looksLikeCode =
-          task.assignedTo === 'engineering' ||
-          /```[\w+#.-]*.*(?:path|file)\s*=/.test(resultStr) ||
-          /```[\w./-]+\.[a-zA-Z0-9]+/.test(resultStr);
 
-        const engineResult = looksLikeCode ? artifactEngine.process(resultStr) : null;
-        if (engineResult && engineResult.vfs.size > 0) {
-          // Prefer engineering results first in merge order
-          if (task.assignedTo === 'engineering') {
-            engineResults.unshift(engineResult);
-          } else {
-            engineResults.push(engineResult);
+        const shouldProcess =
+          task.assignedTo === 'engineering' ||
+          (task.assignedTo !== 'research' &&
+            task.assignedTo !== 'marketing' &&
+            looksLikePathedCode(resultStr));
+
+        let engineResult: ReturnType<ArtifactEngine['process']> | null = null;
+        if (shouldProcess && looksLikePathedCode(resultStr)) {
+          engineResult = artifactEngine.process(resultStr);
+          if (engineResult.vfs.size > 0) {
+            if (task.assignedTo === 'engineering') engineResults.unshift(engineResult);
+            else engineResults.push(engineResult);
           }
         }
 
@@ -138,13 +120,15 @@ export async function POST(request: NextRequest) {
         };
       }
 
-      let finalResult: any = null;
+      let finalResult: ReturnType<ArtifactEngine['merge']> | null = null;
       if (engineResults.length > 0) {
-        // Merge engineering-first results; engine prefers richer structured trees
         finalResult = artifactEngine.merge(engineResults);
+      } else if (plan.tasks.some((t) => t.assignedTo === 'engineering' && t.status === 'completed')) {
+        warnings.push(
+          'Engineering completed but no structured files were parsed. Check that the model returned path-tagged code fences.',
+        );
       }
 
-      // Calculate metrics
       const totalCost = taskLogs.reduce(
         (sum: number, log: any) => sum + (log.actualCost || 0),
         0,
@@ -155,25 +139,29 @@ export async function POST(request: NextRequest) {
       );
       const avgConfidence =
         taskLogs.length > 0
-          ? taskLogs.reduce((sum: number, log: any) => sum + log.confidence, 0) / taskLogs.length
+          ? taskLogs.reduce((sum: number, log: any) => sum + (log.confidence || 0), 0) /
+            taskLogs.length
           : 0;
       const totalLatency = taskLogs.reduce(
         (sum: number, log: any) => sum + (log.latency || 0),
         0,
       );
 
-      // Final result event
       await write('result', {
         success: true,
         plan,
         executionState,
         summary,
         taskResults,
+        warnings,
         artifacts: finalResult
           ? {
               manifest: finalResult.manifest,
               vfs: VirtualFileSystem.toFlatRecord(finalResult.vfs),
-              validation: finalResult.validation,
+              validation: {
+                ...finalResult.validation,
+                warnings: [...(finalResult.validation.warnings || []), ...warnings],
+              },
               framework: finalResult.framework.id,
               previewable: finalResult.previewable,
             }
@@ -196,12 +184,13 @@ export async function POST(request: NextRequest) {
     } catch (error) {
       await write('error', {
         error: error instanceof Error ? error.message : 'Failed to execute plan',
+        code: 'EXECUTION_ERROR',
       });
     } finally {
       try {
         await writer.close();
       } catch {
-        // Already closed
+        // already closed
       }
     }
   })();
@@ -211,7 +200,7 @@ export async function POST(request: NextRequest) {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
-      'X-Accel-Buffering': 'no', // Disable Nginx buffering
+      'X-Accel-Buffering': 'no',
     },
   });
 }

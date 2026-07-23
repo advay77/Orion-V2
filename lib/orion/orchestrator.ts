@@ -6,7 +6,7 @@ import { ResearchAgent } from './agents/research';
 import { MarketingAgent } from './agents/marketing';
 import { SharedMemory } from './shared-memory';
 import { ModelRouter } from './model-router';
-import { OpenRouterClient } from './openrouter-client';
+import { OpenRouterClient, normalizeModelSlug } from './openrouter-client';
 import { CostEngine } from './cost-engine';
 import { ConfidenceCalculator } from './confidence';
 
@@ -78,14 +78,8 @@ export class Orchestrator {
         tasks: wave.map((t) => t.id),
       });
 
-      // Execute all tasks in the wave in parallel
-      const wavePromises = wave.map((task) => this.executeTaskWithRetry(plan, task, priority));
-      
-      try {
-        await Promise.all(wavePromises);
-      } catch (error) {
-        // Continue to next wave even if one fails
-      }
+      // Execute wave with allSettled so one failure does not reject the wave
+      await Promise.allSettled(wave.map((task) => this.executeTaskWithRetry(plan, task, priority)));
 
       this.notifyUpdate('wave_complete', {
         waveNumber: waveIndex + 1,
@@ -171,20 +165,19 @@ export class Orchestrator {
           priority: priority,
         });
 
-        // IMPORTANT: actually apply the routed model (was previously metadata-only)
-        const activeModel =
+        const activeModel = normalizeModelSlug(
           attempt === 0
             ? modelSelection.selectedModel
-            : modelSelection.fallbackModels[attempt - 1] || modelSelection.selectedModel;
+            : modelSelection.fallbackModels[attempt - 1] || modelSelection.selectedModel,
+        );
 
         agent.configureRuntime({
           model: activeModel,
-          fallbacks: modelSelection.fallbackModels,
+          fallbacks: modelSelection.fallbackModels.map(normalizeModelSlug),
           maxTokens: modelSelection.maxTokens,
           temperature: modelSelection.temperature,
         });
 
-        // Store task metadata
         this.sharedMemory.set(`task_${task.id}`, {
           ...task,
           selectedModel: activeModel,
@@ -192,10 +185,8 @@ export class Orchestrator {
           selectionReason: modelSelection.reason,
         });
 
-        // Mark agent as running
         this.planningEngine.setAgentRunning(task.assignedTo, true);
 
-        // Execute task with selected model
         const response = await agent.execute({
           planId: plan.id,
           taskId: task.id,
@@ -207,25 +198,38 @@ export class Orchestrator {
         const latency = Date.now() - startTime;
 
         if (response.success) {
-          const usage = this.sharedMemory.get(`task_${task.id}_usage`) as any;
+          const usage = this.sharedMemory.get(`task_${task.id}_usage`) as
+            | { total_tokens?: number; prompt_tokens?: number; completion_tokens?: number }
+            | undefined;
           const modelUsed =
             (this.sharedMemory.get(`task_${task.id}_model`) as string) || activeModel;
 
           const resultStr =
             typeof response.result === 'string' ? response.result : JSON.stringify(response.result);
-          const actualCost = CostEngine.calculateActualCost(modelUsed, usage, resultStr.length);
-          const tokens = usage ? usage.total_tokens : CostEngine.estimateTokens(resultStr);
-          const agentInstance = this.agents.get(task.assignedTo);
-          const agentConfidence = agentInstance ? agentInstance.getAgentConfidence() : 0.85;
+          const actualCost = CostEngine.calculateActualCost(modelUsed, usage as any, resultStr.length);
+          const tokens = usage?.total_tokens ?? CostEngine.estimateTokens(resultStr);
+
+          const confidence = ConfidenceCalculator.blendTaskConfidence({
+            routerConfidence: modelSelection.confidence,
+            success: true,
+            outputChars: resultStr.length,
+            agentBaseline: agent.getAgentConfidence(),
+          });
+
+          // Research failure must not leave empty analysis for engineering
+          if (task.assignedTo === 'research') {
+            this.sharedMemory.set('research_ok', true);
+          }
 
           const metadata: TaskMetadata = {
             taskId: task.id,
             agent: task.assignedTo,
             selectedModel: modelUsed,
             fallbackModel: modelSelection.fallbackModels[0],
+            selectionReason: modelSelection.reason,
             tokens,
             latency,
-            confidence: modelSelection.confidence || agentConfidence,
+            confidence,
             estimatedCost: modelSelection.estimatedCost,
             actualCost,
             status: 'completed',
@@ -257,13 +261,22 @@ export class Orchestrator {
           continue;
         }
 
-        // Final failure
+        if (task.assignedTo === 'research') {
+          this.sharedMemory.set('research_ok', false);
+          this.sharedMemory.delete('project_analysis');
+          this.sharedMemory.set(
+            'research_degraded_note',
+            `Research failed: ${lastError.message}. Engineering will proceed without live analysis.`,
+          );
+        }
+
         const metadata: TaskMetadata = {
           taskId: task.id,
           agent: task.assignedTo,
           selectedModel: 'unknown',
+          selectionReason: lastError.message,
           tokens: 0,
-          latency: Date.now() - Date.now(),
+          latency: 0,
           confidence: 0,
           estimatedCost: 0,
           actualCost: 0,
@@ -281,7 +294,7 @@ export class Orchestrator {
           metadata,
         });
 
-        return; // Exit after all retries exhausted
+        return;
       } finally {
         this.planningEngine.setAgentRunning(task.assignedTo, false);
       }

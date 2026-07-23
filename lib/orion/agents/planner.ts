@@ -9,7 +9,7 @@ export class PlannerAgent extends BaseAgent {
   private intentClassifier: IntentClassifier;
 
   constructor(openRouterClient: OpenRouterClient, sharedMemory: SharedMemory, model: string = 'openrouter/auto') {
-    super('engineering', model, openRouterClient, sharedMemory);
+    super('planner', model, openRouterClient, sharedMemory);
     this.intentClassifier = new IntentClassifier();
   }
 

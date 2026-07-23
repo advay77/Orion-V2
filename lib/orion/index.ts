@@ -10,14 +10,14 @@ export * from './artifact-engine';
 export * from './intent-classifier';
 export * from './task-templates';
 export * from './cost-engine';
-export * from './confidence';
+export * from './tools/web-fetch';
 
 export { PlannerAgent } from './agents/planner';
 export { EngineeringAgent } from './agents/engineering';
 export { ResearchAgent } from './agents/research';
 export { MarketingAgent } from './agents/marketing';
 
-import { OpenRouterClient } from './openrouter-client';
+import { OpenRouterClient, normalizeModelSlug } from './openrouter-client';
 import { PlannerAgent } from './agents/planner';
 import { EngineeringAgent } from './agents/engineering';
 import { ResearchAgent } from './agents/research';
@@ -27,13 +27,16 @@ import { Orchestrator } from './orchestrator';
 import { SharedMemory } from './shared-memory';
 import { AGENT_MODELS } from './model-config';
 
+function resolveModel(envValue: string | undefined, fallback: string): string {
+  return normalizeModelSlug(envValue || fallback);
+}
+
 /**
  * Creates a fresh Orchestrator per request.
  *
  * NOTE: We deliberately do NOT use a singleton here.
  * A shared singleton would mean concurrent requests from different users
  * share the same PlanningEngine + SharedMemory, causing state corruption.
- * The overhead of construction is negligible compared to LLM call latency.
  */
 export function createOrionSystem(): Orchestrator {
   const apiKey = process.env.OPENROUTER_API_KEY;
@@ -47,25 +50,25 @@ export function createOrionSystem(): Orchestrator {
   const plannerAgent = new PlannerAgent(
     openRouterClient,
     sharedMemory,
-    process.env.PLANNER_MODEL || AGENT_MODELS.planner,
+    resolveModel(process.env.PLANNER_MODEL, AGENT_MODELS.planner),
   );
 
   const engineeringAgent = new EngineeringAgent(
     openRouterClient,
     sharedMemory,
-    process.env.ENGINEERING_MODEL || AGENT_MODELS.engineering,
+    resolveModel(process.env.ENGINEERING_MODEL, AGENT_MODELS.engineering),
   );
 
   const researchAgent = new ResearchAgent(
     openRouterClient,
     sharedMemory,
-    process.env.RESEARCH_MODEL || AGENT_MODELS.research,
+    resolveModel(process.env.RESEARCH_MODEL, AGENT_MODELS.research),
   );
 
   const marketingAgent = new MarketingAgent(
     openRouterClient,
     sharedMemory,
-    process.env.MARKETING_MODEL || AGENT_MODELS.marketing,
+    resolveModel(process.env.MARKETING_MODEL, AGENT_MODELS.marketing),
   );
 
   const planningEngine = new PlanningEngine(plannerAgent, sharedMemory);

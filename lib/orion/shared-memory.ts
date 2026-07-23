@@ -39,6 +39,7 @@ export class SharedMemory {
     this.memory.forEach((value, key) => {
       result[key] = value;
     });
+    result.taskExecutionLog = [...this.taskExecutionLog];
     return result;
   }
 

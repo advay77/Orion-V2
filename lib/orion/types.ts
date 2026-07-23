@@ -1,17 +1,18 @@
 // Orion Core Types
 
-export type AgentType = 'engineering' | 'research' | 'marketing';
+export type AgentType = 'engineering' | 'research' | 'marketing' | 'planner';
 
 export interface TaskMetadata {
   taskId: string;
   agent: AgentType;
   selectedModel: string;
   fallbackModel?: string;
+  selectionReason?: string;
   tokens: number;
-  latency: number; // ms
-  confidence: number; // 0-1
-  estimatedCost: number; // $
-  actualCost: number; // $
+  latency: number;
+  confidence: number;
+  estimatedCost: number;
+  actualCost: number;
   status: 'pending' | 'in_progress' | 'completed' | 'failed';
   artifactPaths?: string[];
   executionStartTime?: string;
@@ -24,7 +25,7 @@ export interface Task {
   priority: 'high' | 'medium' | 'low';
   status: 'pending' | 'in_progress' | 'completed' | 'failed';
   assignedTo?: AgentType;
-  skill?: string; // Assigned skill/capability for this task
+  skill?: string;
   result?: string | unknown;
   metadata?: TaskMetadata;
   createdAt: string;
@@ -77,4 +78,10 @@ export interface OrionConfig {
   researchModel?: string;
   marketingModel?: string;
   plannerModel?: string;
+}
+
+export interface ApiErrorBody {
+  error: string;
+  code: string;
+  retryAfter?: number;
 }

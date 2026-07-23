@@ -7,37 +7,46 @@ export type AgentRole = 'planner' | 'engineering' | 'research' | 'marketing';
 
 export interface CatalogModel {
   id: string;
-  /** Roles this model is a strong default for */
   specialties: AgentRole[];
-  capability: number; // 1-10
-  quality: number; // 1-10
-  speed: number; // 1-10
-  /** USD per 1M prompt tokens */
+  capability: number;
+  quality: number;
+  speed: number;
   promptPrice: number;
-  /** USD per 1M completion tokens */
   completionPrice: number;
   contextWindow: number;
-  /** Suggested generation cap — keeps token spend down */
   maxTokens: number;
   temperature: number;
-  /** Prefer for this priority when specialties match */
   tier: 'flagship' | 'workhorse' | 'fast' | 'budget';
 }
 
 /**
- * Curated pool: best-in-class for coding / reasoning / writing,
- * plus cheaper workhorses and budget options for cost/speed modes.
+ * Curated pool: best-in-class for coding / reasoning / writing.
+ * Budget `:free` entries exist only for priority=cost / last-resort — never
+ * as balanced defaults (OpenRouter has retired many free slugs → 404).
  */
 export const MODEL_CATALOG: CatalogModel[] = [
   // ── Engineering / coding ──────────────────────────────────────────
   {
     id: 'deepseek/deepseek-chat',
-    specialties: ['engineering', 'planner', 'marketing'],
+    specialties: ['engineering', 'planner', 'marketing', 'research'],
     capability: 9,
     quality: 9,
     speed: 7,
     promptPrice: 0.14,
     completionPrice: 0.28,
+    contextWindow: 128000,
+    maxTokens: 8192,
+    temperature: 0.2,
+    tier: 'workhorse',
+  },
+  {
+    id: 'qwen/qwen3-coder',
+    specialties: ['engineering'],
+    capability: 9,
+    quality: 9,
+    speed: 6,
+    promptPrice: 0.2,
+    completionPrice: 0.8,
     contextWindow: 128000,
     maxTokens: 8192,
     temperature: 0.2,
@@ -69,6 +78,7 @@ export const MODEL_CATALOG: CatalogModel[] = [
     temperature: 0.25,
     tier: 'flagship',
   },
+
   // ── Reasoning / research ──────────────────────────────────────────
   {
     id: 'google/gemini-2.5-pro',
@@ -95,19 +105,6 @@ export const MODEL_CATALOG: CatalogModel[] = [
     maxTokens: 4096,
     temperature: 0.3,
     tier: 'flagship',
-  },
-  {
-    id: 'deepseek/deepseek-chat',
-    specialties: ['engineering', 'planner', 'marketing', 'research'],
-    capability: 9,
-    quality: 9,
-    speed: 7,
-    promptPrice: 0.14,
-    completionPrice: 0.28,
-    contextWindow: 128000,
-    maxTokens: 8192,
-    temperature: 0.2,
-    tier: 'workhorse',
   },
   {
     id: 'openai/o4-mini',
@@ -164,31 +161,18 @@ export const MODEL_CATALOG: CatalogModel[] = [
     tier: 'fast',
   },
 
-  // ── Budget / free fallbacks (cost priority + last resort) ─────────
+  // ── Budget only (priority=cost / last resort) — no research specialty on dead free R1 ──
   {
     id: 'deepseek/deepseek-chat-v3.1:free',
-    specialties: ['engineering', 'planner', 'marketing', 'research'],
-    capability: 8,
-    quality: 8,
+    specialties: ['engineering', 'planner', 'marketing'],
+    capability: 7,
+    quality: 7,
     speed: 6,
     promptPrice: 0,
     completionPrice: 0,
     contextWindow: 64000,
-    maxTokens: 6144,
+    maxTokens: 4096,
     temperature: 0.3,
-    tier: 'budget',
-  },
-  {
-    id: 'qwen/qwen3-coder:free',
-    specialties: ['engineering'],
-    capability: 8,
-    quality: 8,
-    speed: 5,
-    promptPrice: 0,
-    completionPrice: 0,
-    contextWindow: 32000,
-    maxTokens: 6144,
-    temperature: 0.2,
     tier: 'budget',
   },
   {
@@ -206,11 +190,14 @@ export const MODEL_CATALOG: CatalogModel[] = [
   },
 ];
 
-/** Default preferred model per agent when env is unset (workhorse, not free). */
+/**
+ * Defaults when env is unset — paid workhorses only.
+ * Research uses Gemini Flash (reliable + cheap); R1 is quality-priority via router.
+ */
 export const AGENT_MODELS = {
   planner: 'deepseek/deepseek-chat',
   engineering: 'deepseek/deepseek-chat',
-  research: 'deepseek/deepseek-r1',
+  research: 'google/gemini-2.5-flash',
   marketing: 'google/gemini-2.5-flash',
 } as const;
 
@@ -231,7 +218,7 @@ export const MODEL_DESCRIPTIONS: Record<string, string> = Object.fromEntries(
   ]),
 );
 
-/** @deprecated use MODEL_CATALOG — kept for older imports */
+/** @deprecated use MODEL_CATALOG */
 export const MODEL_CONFIG = {
   DEEPSEEK_CHAT: 'deepseek/deepseek-chat',
   DEEPSEEK_R1: 'deepseek/deepseek-r1',

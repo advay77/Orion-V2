@@ -17,16 +17,16 @@ Create `.env` in the project root:
 OPENROUTER_API_KEY=sk-or-your-key
 ```
 
-Optional overrides (defaults are task-fit workhorses, not free-only):
+Optional overrides (defaults are paid workhorses, not free):
 
 ```env
 PLANNER_MODEL=deepseek/deepseek-chat
 ENGINEERING_MODEL=anthropic/claude-sonnet-4
-RESEARCH_MODEL=deepseek/deepseek-r1
+RESEARCH_MODEL=google/gemini-2.5-flash
 MARKETING_MODEL=google/gemini-2.5-flash
 ```
 
-UI priority control (`balanced` / `quality` / `speed` / `cost`) changes how the router scores specialty, quality, latency, and $.
+UI priority (`balanced` / `quality` / `speed` / `cost`) changes router scoring. Avoid `:free` slugs — many are retired (404).
 
 ## Run
 

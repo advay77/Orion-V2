@@ -1,4 +1,4 @@
-import { OpenRouterClient } from './openrouter-client';
+import { OpenRouterClient, normalizeModelSlug } from './openrouter-client';
 import { ConfidenceCalculator } from './confidence';
 import {
   AGENT_MODELS,
@@ -115,8 +115,8 @@ export class ModelRouter {
     );
 
     return {
-      selectedModel: selected.model,
-      fallbackModels: fallbacks,
+      selectedModel: normalizeModelSlug(selected.model),
+      fallbackModels: fallbacks.map(normalizeModelSlug),
       reason: this.getSelectionReason(agentType, selected, priority),
       confidence: ConfidenceCalculator.normalizeToDecimal(confidenceResult.score),
       estimatedLatency: this.estimateLatency(selected),
@@ -145,17 +145,25 @@ export class ModelRouter {
 
   private getCandidateModels(agentType: AgentRole, priority: string): ModelRanking[] {
     const all = Array.from(this.modelCache.values());
+    const isFreeSlug = (id: string) => id.includes(':free');
+    const isBudget = (m: ModelRanking) => m.tier === 'budget' || isFreeSlug(m.model);
 
-    // Specialty pool first
     let pool = all.filter((m) => m.specialties.includes(agentType));
 
-    // Quality mode: include flagships even if not listed specialty
-    if (priority === 'quality') {
-      const flagships = all.filter((m) => m.tier === 'flagship');
-      pool = this.uniqueById([...pool, ...flagships]);
+    // balanced / quality / speed: NEVER pick free/budget as primary candidates
+    if (priority === 'balanced' || priority === 'quality' || priority === 'speed') {
+      pool = pool.filter((m) => !isBudget(m) || m.model === 'openrouter/auto');
     }
 
-    // Cost mode: include budget + workhorse only
+    if (priority === 'quality') {
+      const flagships = all.filter((m) => m.tier === 'flagship' && !isFreeSlug(m.model));
+      pool = this.uniqueById([...pool, ...flagships]);
+      // Prefer R1 / Sonnet for research quality
+      if (agentType === 'research' && this.modelCache.has('deepseek/deepseek-r1')) {
+        pool = this.uniqueById([this.modelCache.get('deepseek/deepseek-r1')!, ...pool]);
+      }
+    }
+
     if (priority === 'cost') {
       pool = all.filter(
         (m) =>
@@ -164,22 +172,23 @@ export class ModelRouter {
       );
     }
 
-    // Speed mode: prefer fast/workhorse
     if (priority === 'speed') {
-      pool = all.filter(
-        (m) =>
-          m.specialties.includes(agentType) &&
-          (m.tier === 'fast' || m.tier === 'workhorse' || m.tier === 'budget'),
-      );
+      pool = pool.filter((m) => m.tier === 'fast' || m.tier === 'workhorse');
     }
 
-    // Always allow env default + auto as candidates
     const envDefault = AGENT_MODELS[agentType as keyof typeof AGENT_MODELS];
     if (envDefault && this.modelCache.has(envDefault)) {
       pool = this.uniqueById([this.modelCache.get(envDefault)!, ...pool]);
     }
+
+    // openrouter/auto only as soft fallback candidate (last in rank via score)
     if (this.modelCache.has('openrouter/auto')) {
       pool = this.uniqueById([...pool, this.modelCache.get('openrouter/auto')!]);
+    }
+
+    // If we filtered everything out, fall back to non-free specialty models
+    if (pool.filter((m) => !isFreeSlug(m.model)).length === 0) {
+      pool = all.filter((m) => m.specialties.includes(agentType) && !isFreeSlug(m.model));
     }
 
     return pool.filter(Boolean);
@@ -243,7 +252,6 @@ export class ModelRouter {
           break;
         case 'balanced':
         default:
-          // Best job-fit per dollar: strong specialty + quality, mild cost, decent speed
           score =
             specialtyBonus +
             model.quality * 1.8 +
@@ -253,7 +261,10 @@ export class ModelRouter {
             overkillPenalty +
             tokenBudgetBonus +
             (model.tier === 'workhorse' ? 4 : 0) +
-            (model.tier === 'flagship' ? 1 : 0);
+            (model.tier === 'flagship' ? 1 : 0) +
+            (model.tier === 'fast' ? 2 : 0) -
+            (model.tier === 'budget' || model.model.includes(':free') ? 25 : 0) -
+            (model.model === 'openrouter/auto' ? 6 : 0);
           break;
       }
 

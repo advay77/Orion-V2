@@ -57,6 +57,7 @@ export abstract class BaseAgent {
       engineering: 0.85,
       research: 0.9,
       marketing: 0.8,
+      planner: 0.88,
     };
     return confidenceMap[this.agentType] || 0.85;
   }
@@ -64,8 +65,9 @@ export abstract class BaseAgent {
   private getFallbackModels(): string[] {
     const fallbackMap: Record<AgentType, string[]> = {
       engineering: ['deepseek/deepseek-chat', 'qwen/qwen3-coder', 'google/gemini-2.5-pro', 'openrouter/auto'],
-      research: ['deepseek/deepseek-r1', 'google/gemini-2.5-pro', 'openai/o4-mini', 'openrouter/auto'],
+      research: ['google/gemini-2.5-flash', 'deepseek/deepseek-chat', 'google/gemini-2.5-pro', 'openrouter/auto'],
       marketing: ['google/gemini-2.5-flash', 'openai/gpt-4.1-mini', 'deepseek/deepseek-chat', 'openrouter/auto'],
+      planner: ['deepseek/deepseek-chat', 'google/gemini-2.5-flash', 'openrouter/auto'],
     };
     return fallbackMap[this.agentType] || ['deepseek/deepseek-chat', 'openrouter/auto'];
   }

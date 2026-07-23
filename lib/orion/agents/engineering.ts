@@ -56,8 +56,12 @@ export class EngineeringAgent extends BaseAgent {
     }
     let projectAnalysisInfo = '';
     const projectAnalysis = this.sharedMemory.get('project_analysis');
-    if (projectAnalysis) {
+    const researchOk = this.sharedMemory.get('research_ok');
+    const degraded = this.sharedMemory.get('research_degraded_note');
+    if (projectAnalysis && researchOk !== false) {
       projectAnalysisInfo = `\n\nPROJECT ANALYSIS FROM RESEARCH AGENT:\n${projectAnalysis}`;
+    } else if (degraded) {
+      projectAnalysisInfo = `\n\nNOTE: ${degraded}\nProceed using the user objective alone.`;
     }
 
     return `You are Orion's Engineering Agent — a careful software engineer who ships coherent repositories, not scattered snippets.
