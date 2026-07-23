@@ -7,6 +7,8 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  // Ensure monaco ESM resolves cleanly under Turbopack
+  transpilePackages: ['monaco-editor'],
   // Security headers for every response
   async headers() {
     return [
@@ -25,13 +27,16 @@ const nextConfig = {
             key: 'Content-Security-Policy',
             value: [
               "default-src 'self'",
+              // Monaco is bundled locally; keep unsafe-eval for its language services.
               "script-src 'self' 'unsafe-eval' 'unsafe-inline' https://va.vercel-scripts.com",
               "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-              "font-src 'self' https://fonts.gstatic.com",
+              "font-src 'self' data: https://fonts.gstatic.com",
               "img-src 'self' data: blob: https:",
               "connect-src 'self' https://openrouter.ai https://vitals.vercel-insights.com",
-              "frame-src 'none'",
-              "worker-src blob:",
+              // Artifact preview uses sandboxed iframes / blob documents.
+              "frame-src 'self' blob: data:",
+              "worker-src 'self' blob:",
+              "child-src 'self' blob:",
             ].join('; '),
           },
         ],
