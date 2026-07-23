@@ -13,11 +13,13 @@ export class CostEngine {
   // Model pricing (cost per 1M tokens in USD)
   private static MODEL_PRICING: Record<string, ModelPricing> = {
     'deepseek/deepseek-chat': { prompt: 0.14, completion: 0.28 },
+    'deepseek/deepseek-chat-v3.1:free': { prompt: 0, completion: 0 },
     'deepseek/deepseek-r1': { prompt: 0.55, completion: 2.19 },
-    'qwen/qwen-3-coder-235b': { prompt: 0.50, completion: 1.00 },
-    'glm-5-2': { prompt: 0.20, completion: 0.40 },
-    'kimi/kimi-k2.7': { prompt: 0.12, completion: 0.12 },
-    'minimax/minimax-m3': { prompt: 0.10, completion: 0.10 },
+    'deepseek/deepseek-r1:free': { prompt: 0, completion: 0 },
+    'qwen/qwen3-coder:free': { prompt: 0, completion: 0 },
+    'qwen/qwen3.6-plus:free': { prompt: 0, completion: 0 },
+    'minimax/minimax-m2.5:free': { prompt: 0, completion: 0 },
+    'openrouter/auto': { prompt: 0.15, completion: 0.3 },
   };
 
   static getPricing(model: string): ModelPricing {

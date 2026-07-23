@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { Plan, ExecutionState } from '@/lib/orion';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Cpu, Clock, DollarSign, Zap, Activity, CheckCircle, XCircle, Loader2, ChevronDown, ChevronUp, Info } from 'lucide-react';
+import { CheckCircle, XCircle, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
 
 interface AgentDashboardProps {
   plan: Plan | null;
@@ -55,37 +55,56 @@ interface AgentMetrics {
   confidence: number;
   cost: number;
   isEstimated: boolean;
-  timeline: Array<{ time: number; event: string }>;
   tasksDetail: TaskMetricDetail[];
 }
 
-const MODEL_SPECS: Record<string, { speed: number; cost: number; capability: number; promptPrice: number; completionPrice: number }> = {
+const MODEL_SPECS: Record<
+  string,
+  { speed: number; cost: number; capability: number; promptPrice: number; completionPrice: number }
+> = {
   'deepseek/deepseek-chat': { speed: 7, cost: 15000, capability: 9, promptPrice: 0.14, completionPrice: 0.28 },
+  'deepseek/deepseek-chat-v3.1:free': {
+    speed: 7,
+    cost: 100000,
+    capability: 9,
+    promptPrice: 0,
+    completionPrice: 0,
+  },
   'deepseek/deepseek-r1': { speed: 5, cost: 10000, capability: 10, promptPrice: 0.55, completionPrice: 2.19 },
-  'qwen/qwen-3-coder-235b': { speed: 6, cost: 12000, capability: 9, promptPrice: 0.50, completionPrice: 1.00 },
-  'glm-5-2': { speed: 8, cost: 18000, capability: 8, promptPrice: 0.20, completionPrice: 0.40 },
-  'kimi/kimi-k2.7': { speed: 8, cost: 20000, capability: 7, promptPrice: 0.12, completionPrice: 0.12 },
-  'minimax/minimax-m3': { speed: 9, cost: 25000, capability: 6, promptPrice: 0.10, completionPrice: 0.10 },
-  'unknown': { speed: 7, cost: 15000, capability: 8, promptPrice: 0.15, completionPrice: 0.30 },
+  'deepseek/deepseek-r1:free': { speed: 5, cost: 100000, capability: 10, promptPrice: 0, completionPrice: 0 },
+  'qwen/qwen3-coder:free': { speed: 6, cost: 100000, capability: 9, promptPrice: 0, completionPrice: 0 },
+  'qwen/qwen3.6-plus:free': { speed: 8, cost: 100000, capability: 8, promptPrice: 0, completionPrice: 0 },
+  'minimax/minimax-m2.5:free': { speed: 9, cost: 100000, capability: 7, promptPrice: 0, completionPrice: 0 },
+  'openrouter/auto': { speed: 8, cost: 50000, capability: 8, promptPrice: 0.15, completionPrice: 0.3 },
+  unknown: { speed: 7, cost: 15000, capability: 8, promptPrice: 0.15, completionPrice: 0.3 },
 };
 
-export function AgentDashboard({ plan, state, summary, memory, taskResults, metrics }: AgentDashboardProps) {
+const AGENTS = [
+  { id: 'planner', name: 'Planner' },
+  { id: 'engineering', name: 'Engineering' },
+  { id: 'research', name: 'Research' },
+  { id: 'marketing', name: 'Marketing' },
+];
+
+export function AgentDashboard({ plan, state, summary, memory, metrics }: AgentDashboardProps) {
   const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
 
-  const agents = [
-    { id: 'planner', name: 'Planner', color: 'from-purple-500 to-purple-600', icon: Cpu },
-    { id: 'engineering', name: 'Engineering', color: 'from-blue-500 to-blue-600', icon: Zap },
-    { id: 'research', name: 'R&D', color: 'from-green-500 to-green-600', icon: Activity },
-    { id: 'marketing', name: 'Marketing', color: 'from-orange-500 to-orange-600', icon: DollarSign },
-  ];
+  const getModelName = (agentId: string): string => {
+    const models: Record<string, string> = {
+      planner: 'deepseek/deepseek-chat-v3.1:free',
+      engineering: 'qwen/qwen3-coder:free',
+      research: 'deepseek/deepseek-r1:free',
+      marketing: 'qwen/qwen3.6-plus:free',
+    };
+    return models[agentId] || 'openrouter/auto';
+  };
 
   const getAgentMetrics = (agentId: string): AgentMetrics => {
     const isRunning = state.runningAgents.includes(agentId as any);
     const tasks = plan?.tasks.filter((t) => t.assignedTo === agentId) || [];
     const completedTasks = tasks.filter((t) => t.status === 'completed');
     const failedTasks = tasks.filter((t) => t.status === 'failed');
-    
-    // Only show metrics if agent has tasks
+
     if (tasks.length === 0) {
       return {
         status: 'idle',
@@ -95,306 +114,250 @@ export function AgentDashboard({ plan, state, summary, memory, taskResults, metr
         confidence: 0,
         cost: 0,
         isEstimated: true,
-        timeline: [],
         tasksDetail: [],
       };
     }
 
-    const modelName = tasks.find(t => t.metadata)?.metadata?.selectedModel || getModelName(agentId);
-    const spec = MODEL_SPECS[modelName] || MODEL_SPECS['unknown'];
-    const requiredCapability = agentId === 'engineering' ? 8 : agentId === 'research' ? 9 : 7;
-    
-    const tasksDetail: TaskMetricDetail[] = tasks.map((task) => {
-      const metadata = task.metadata;
-      const taskModel = metadata?.selectedModel || modelName;
-      const taskSpec = MODEL_SPECS[taskModel] || spec;
-      
-      let latencyValue = 0;
-      let latencyIsEst = false;
-      let latencyFormula = '';
-      
-      let tokensValue = 0;
-      let tokensIsEst = false;
-      let tokensFormula = '';
-      
-      let costValue = 0;
-      let costIsEst = false;
-      let costFormula = '';
-      
-      let confidenceValue = 0;
-      let confidenceIsEst = false;
-      let confidenceFormula = '';
+    const modelName =
+      completedTasks[0]?.metadata?.selectedModel ||
+      tasks[0]?.metadata?.selectedModel ||
+      getModelName(agentId);
+    const modelSpec = MODEL_SPECS[modelName] || MODEL_SPECS.unknown;
 
-      // 1. Latency
-      if (metadata && metadata.latency > 0) {
-        latencyValue = metadata.latency;
-        latencyFormula = `Actual execution duration = ${metadata.latency}ms`;
+    let latencySum = 0;
+    let tokensSum = 0;
+    let costSum = 0;
+    let confidenceSum = 0;
+    const tasksDetail: TaskMetricDetail[] = [];
+    let hasRealMetrics = false;
+
+    tasks.forEach((task) => {
+      const meta = task.metadata;
+      let latency = 0;
+      let latencyIsEst = true;
+      let latencyFormula = 'Estimated from model speed';
+
+      if (meta?.latency != null && meta.latency > 0) {
+        latency = meta.latency;
+        latencyIsEst = false;
+        latencyFormula = 'From task metadata.latency';
+        hasRealMetrics = true;
+      } else if (meta?.executionStartTime && meta?.executionEndTime) {
+        latency = new Date(meta.executionEndTime).getTime() - new Date(meta.executionStartTime).getTime();
+        latencyIsEst = false;
+        latencyFormula = 'endTime − startTime';
+        hasRealMetrics = true;
+      } else if (task.status === 'in_progress' && meta?.executionStartTime) {
+        latency = Date.now() - new Date(meta.executionStartTime).getTime();
+        latencyIsEst = false;
+        latencyFormula = 'now − startTime (in progress)';
       } else {
-        latencyIsEst = true;
-        latencyValue = Math.round((100 / taskSpec.speed) * 100);
-        latencyFormula = `Est: (100 / speed:${taskSpec.speed}) * 100 = ${latencyValue}ms`;
+        latency = Math.round((100 / modelSpec.speed) * 1000);
       }
 
-      // 2. Tokens
-      if (metadata && metadata.tokens > 0) {
-        tokensValue = metadata.tokens;
-        tokensFormula = `Actual usage = ${metadata.tokens.toLocaleString()} tokens`;
+      let tokens = meta?.tokens ?? 0;
+      let tokensIsEst = !(meta?.tokens != null && meta.tokens > 0);
+      let tokensFormula = !tokensIsEst
+        ? 'From task metadata.tokens'
+        : `Estimate ≈ ${Math.round((task.description?.length || 40) * 1.3)} tokens`;
+
+      if (tokensIsEst) {
+        tokens = Math.round((task.description?.length || 40) * 1.3 + 800);
       } else {
-        tokensIsEst = true;
-        tokensValue = 1000; // Est. 1000 tokens
-        tokensFormula = `Est. baseline = 1,000 tokens (700 prompt, 300 completion)`;
+        hasRealMetrics = true;
       }
 
-      // 3. Cost
-      if (metadata && metadata.actualCost > 0) {
-        costValue = metadata.actualCost;
-        costFormula = `Actual: (prompt_tokens * $${taskSpec.promptPrice}/1M) + (comp_tokens * $${taskSpec.completionPrice}/1M) = $${metadata.actualCost.toFixed(6)}`;
+      const reportedCost = meta?.actualCost ?? meta?.estimatedCost;
+      let cost = reportedCost ?? 0;
+      let costIsEst = reportedCost == null || (meta?.actualCost == null && meta?.estimatedCost != null);
+      let costFormula =
+        meta?.actualCost != null
+          ? 'From metadata.actualCost'
+          : meta?.estimatedCost != null
+            ? 'From metadata.estimatedCost'
+            : '(tokens/1000) × blended price';
+
+      if (reportedCost == null) {
+        cost = (tokens / 1000) * ((modelSpec.promptPrice + modelSpec.completionPrice) / 2);
       } else {
-        costIsEst = true;
-        const promptEst = 700;
-        const completionEst = 300;
-        costValue = (promptEst / 1_000_000) * taskSpec.promptPrice + (completionEst / 1_000_000) * taskSpec.completionPrice;
-        costFormula = `Est: (700 * $${taskSpec.promptPrice}/1M) + (300 * $${taskSpec.completionPrice}/1M) = $${costValue.toFixed(6)}`;
+        hasRealMetrics = true;
       }
 
-      // 4. Confidence
-      if (metadata && metadata.confidence > 0) {
-        confidenceValue = Math.round(metadata.confidence * 100);
-        const gap = taskSpec.capability - requiredCapability;
-        const gapBonus = Math.min(gap * 2.5, 40);
-        confidenceFormula = `Formula: 50 + min(gap:${gap} * 2.5, 40) - ambiguity:0 = ${confidenceValue}%`;
-      } else {
-        confidenceIsEst = true;
-        const gap = taskSpec.capability - requiredCapability;
-        const gapBonus = Math.min(gap * 2.5, 40);
-        const score = 50 + gapBonus;
-        confidenceValue = Math.round(score);
-        confidenceFormula = `Est: 50 + min(gap:${gap} * 2.5, 40) - ambiguity:0 = ${confidenceValue}%`;
+      let confidence = meta?.confidence != null ? Math.round(meta.confidence * 100) : 0;
+      let confidenceIsEst = meta?.confidence == null;
+      let confidenceFormula =
+        meta?.confidence != null ? 'Agent confidence score' : 'Default until task completes';
+
+      if (meta?.confidence == null && task.status === 'completed') {
+        confidence = 85;
       }
 
-      return {
+      latencySum += latency;
+      tokensSum += tokens;
+      costSum += cost;
+      confidenceSum += confidence;
+
+      tasksDetail.push({
         description: task.description,
         status: task.status,
-        model: taskModel,
-        latency: latencyValue,
+        model: meta?.selectedModel || modelName,
+        latency,
         latencyIsEst,
         latencyFormula,
-        tokens: tokensValue,
+        tokens,
         tokensIsEst,
         tokensFormula,
-        cost: costValue,
+        cost,
         costIsEst,
         costFormula,
-        confidence: confidenceValue,
+        confidence,
         confidenceIsEst,
         confidenceFormula,
-      };
+      });
     });
 
-    // Aggregate values
-    const hasCompletedTasks = completedTasks.length > 0;
-    const aggregatedTokens = tasksDetail.reduce((sum, t) => sum + t.tokens, 0);
-    const aggregatedLatency = tasksDetail.reduce((sum, t) => sum + t.latency, 0);
-    const aggregatedCost = Number(tasksDetail.reduce((sum, t) => sum + t.cost, 0).toFixed(6));
-    const confidenceSum = tasksDetail.reduce((sum, t) => sum + t.confidence, 0);
-    const averageConfidence = tasksDetail.length > 0 ? Math.round(confidenceSum / tasksDetail.length) : 0;
+    const avgConfidence = tasksDetail.length > 0 ? Math.round(confidenceSum / tasksDetail.length) : 0;
 
     return {
-      status: isRunning ? 'running' : failedTasks.length > 0 ? 'error' : completedTasks.length > 0 ? 'completed' : 'idle',
+      status: isRunning
+        ? 'running'
+        : failedTasks.length > 0
+          ? 'error'
+          : completedTasks.length > 0
+            ? 'completed'
+            : 'idle',
       model: modelName,
-      tokens: aggregatedTokens,
-      latency: aggregatedLatency,
-      confidence: averageConfidence,
-      cost: aggregatedCost,
-      isEstimated: !hasCompletedTasks,
-      timeline: generateTimeline(tasks),
+      tokens: tokensSum,
+      latency: latencySum,
+      confidence: avgConfidence,
+      cost: costSum,
+      isEstimated: !hasRealMetrics,
       tasksDetail,
     };
   };
 
-  const getModelName = (agentId: string): string => {
-    const models: Record<string, string> = {
-      planner: 'deepseek/deepseek-chat',
-      engineering: 'qwen/qwen-3-coder-235b',
-      research: 'glm-5-2',
-      marketing: 'deepseek/deepseek-chat',
-    };
-    return models[agentId] || 'Unknown';
-  };
+  if (!plan) return null;
 
-  const generateTimeline = (tasks: any[]) => {
-    const timeline: Array<{ time: number; event: string }> = [];
-    
-    tasks.forEach((task) => {
-      if (task.metadata?.executionStartTime && task.metadata?.executionEndTime) {
-        const startTime = new Date(task.metadata.executionStartTime).getTime();
-        const endTime = new Date(task.metadata.executionEndTime).getTime();
-        const duration = Math.round((endTime - startTime) / 1000);
-        
-        timeline.push({
-          time: duration,
-          event: task.description.substring(0, 40),
-        });
-      } else if (task.status === 'in_progress' && task.metadata?.executionStartTime) {
-        const startTime = new Date(task.metadata.executionStartTime).getTime();
-        const now = Date.now();
-        const duration = Math.round((now - startTime) / 1000);
-        
-        timeline.push({
-          time: duration,
-          event: task.description.substring(0, 40),
-        });
-      }
-    });
-    
-    return timeline;
-  };
-
-  // Don't render if no plan exists
-  if (!plan) {
-    return null;
-  }
+  const progress = Math.round(
+    ((summary.completed + summary.failed) / (summary.totalTasks || 1)) * 100,
+  );
 
   return (
-    <div className="h-full bg-[#161b22] flex flex-col">
-      {/* Header */}
-      <div className="p-4 border-b border-[#30363d]">
-        <h2 className="text-white font-semibold text-sm flex items-center gap-2">
-          <Activity className="w-4 h-4 text-cyan-400" />
-          Agent Execution
-        </h2>
+    <div className="h-full bg-orion-elevated/40 flex flex-col border-r border-orion-hairline">
+      <div className="px-4 py-3 border-b border-orion-hairline flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-medium text-orion-paper">Agents</h2>
+          <p className="text-[11px] font-mono text-muted-foreground mt-0.5">
+            {summary.completed}/{summary.totalTasks || 0} tasks · {progress}%
+          </p>
+        </div>
+        {metrics && (
+          <div className="text-right text-[11px] font-mono text-muted-foreground">
+            <div>${(metrics.totalCost || 0).toFixed(4)}</div>
+            <div>{Math.round(metrics.totalLatency || 0)}ms</div>
+          </div>
+        )}
       </div>
 
-      {/* Agent Cards */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
-        {agents.map((agent) => {
-          const agentMetrics = getAgentMetrics(agent.id);
-          const Icon = agent.icon;
-          const tasks = plan?.tasks.filter((t) => t.assignedTo === agent.id) || [];
-          const hasTasks = tasks.length > 0;
-          
-          // Only show agent card if it has tasks or is running
-          if (!hasTasks && agentMetrics.status === 'idle') {
-            return null;
-          }
-          
-          return (
-            <motion.div
-              key={agent.id}
-              initial={{ opacity: 0, x: -20 }}
-              animate={{ opacity: 1, x: 0 }}
-              className="bg-[#0d1117] border border-[#30363d] rounded-lg p-4 space-y-3"
-            >
-              {/* Agent Header */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${agent.color} flex items-center justify-center`}>
-                    <Icon className="w-4 h-4 text-white" />
-                  </div>
-                  <div>
+      <div className="h-1 bg-secondary/80">
+        <div
+          className="h-full bg-orion-ink transition-all duration-500"
+          style={{ width: `${progress}%` }}
+        />
+      </div>
+
+      <div className="flex-1 overflow-y-auto">
+        <div className="divide-y divide-orion-hairline">
+          {AGENTS.map((agent) => {
+            const agentMetrics = getAgentMetrics(agent.id);
+            const tasks = plan.tasks.filter((t) => t.assignedTo === agent.id);
+            if (tasks.length === 0 && agentMetrics.status === 'idle') return null;
+
+            const expanded = expandedAgent === agent.id;
+
+            return (
+              <motion.div
+                key={agent.id}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="px-4 py-3"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <h3 className="text-white font-medium text-sm">{agent.name}</h3>
+                      <h3 className="text-sm font-medium text-foreground">{agent.name}</h3>
+                      <StatusBadge status={agentMetrics.status} />
                       {agentMetrics.isEstimated && (
-                        <span className="text-[9px] px-1 bg-orange-950/50 border border-orange-500/30 text-orange-400 rounded">
-                          Estimated
-                        </span>
+                        <span className="text-[10px] text-muted-foreground/80">est.</span>
                       )}
                     </div>
-                    <p className="text-[#8b949e] text-xs font-mono truncate max-w-[180px]">{agentMetrics.model}</p>
+                    <p className="text-[11px] font-mono text-muted-foreground truncate mt-0.5">
+                      {agentMetrics.model}
+                    </p>
                   </div>
                 </div>
-                <StatusBadge status={agentMetrics.status} />
-              </div>
 
-              {/* Metrics Grid */}
-              <div className="grid grid-cols-2 gap-2">
-                <MetricCard
-                  icon={Clock}
-                  label="Latency"
-                  value={`${agentMetrics.latency.toLocaleString()}ms`}
-                  color="text-cyan-400"
-                />
-                <MetricCard
-                  icon={Cpu}
-                  label="Tokens"
-                  value={agentMetrics.tokens.toLocaleString()}
-                  color="text-purple-400"
-                />
-                <MetricCard
-                  icon={Zap}
-                  label="Confidence"
-                  value={`${agentMetrics.confidence}%`}
-                  color="text-green-400"
-                />
-                <MetricCard
-                  icon={DollarSign}
-                  label="Cost"
-                  value={`$${agentMetrics.cost.toFixed(4)}`}
-                  color="text-orange-400"
-                />
-              </div>
+                <div className="mt-2.5 grid grid-cols-4 gap-2 text-[11px]">
+                  <Metric label="Latency" value={`${agentMetrics.latency.toLocaleString()}ms`} />
+                  <Metric label="Tokens" value={agentMetrics.tokens.toLocaleString()} />
+                  <Metric label="Conf." value={`${agentMetrics.confidence}%`} />
+                  <Metric label="Cost" value={`$${agentMetrics.cost.toFixed(4)}`} />
+                </div>
 
-              {/* Collapsible Formulas Details */}
-              <div>
                 <button
-                  onClick={() => setExpandedAgent(expandedAgent === agent.id ? null : agent.id)}
-                  className="w-full flex items-center justify-between text-xs text-[#8b949e] hover:text-cyan-400 py-1.5 border-t border-[#21262d] mt-2 transition-colors duration-200"
+                  type="button"
+                  onClick={() => setExpandedAgent(expanded ? null : agent.id)}
+                  className="mt-2 w-full flex items-center justify-between text-[11px] text-muted-foreground hover:text-orion-ink py-1"
                 >
-                  <span className="flex items-center gap-1.5 font-medium">
-                    <Info className="w-3.5 h-3.5" />
-                    {expandedAgent === agent.id ? 'Hide Calculation Formulas' : 'View Calculation Formulas'}
-                  </span>
-                  {expandedAgent === agent.id ? (
-                    <ChevronUp className="w-3.5 h-3.5" />
-                  ) : (
-                    <ChevronDown className="w-3.5 h-3.5" />
-                  )}
+                  <span>{expanded ? 'Hide details' : 'Details'}</span>
+                  {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                 </button>
 
                 <AnimatePresence>
-                  {expandedAgent === agent.id && (
+                  {expanded && (
                     <motion.div
                       initial={{ height: 0, opacity: 0 }}
                       animate={{ height: 'auto', opacity: 1 }}
                       exit={{ height: 0, opacity: 0 }}
                       className="overflow-hidden"
                     >
-                      <div className="pt-2 mt-1 border-t border-[#21262d]/50 space-y-2 text-[10px]">
-                        {agentMetrics.tasksDetail.map((taskDetail, idx) => (
-                          <div key={idx} className="bg-[#161b22] border border-[#30363d] rounded p-2.5 space-y-2">
-                            <div className="flex items-center justify-between border-b border-[#21262d] pb-1">
-                              <span className="font-medium text-white truncate max-w-[200px]" title={taskDetail.description}>
-                                Task: {taskDetail.description}
-                              </span>
-                              <span className="text-[9px] text-cyan-400 px-1 bg-cyan-950/30 rounded border border-cyan-800/30 capitalize">
-                                {taskDetail.status}
+                      <div className="pt-2 space-y-2">
+                        {tasks.map((task) => (
+                          <div
+                            key={task.id}
+                            className="rounded-md border border-orion-hairline bg-orion-surface/60 p-2.5"
+                          >
+                            <div className="flex items-center justify-between gap-2 mb-1.5">
+                              <p className="text-xs text-foreground truncate">{task.description}</p>
+                              <span className="text-[10px] font-mono text-muted-foreground capitalize shrink-0">
+                                {task.status}
                               </span>
                             </div>
-                            <div className="space-y-1.5 font-mono text-[#8b949e]">
-                              <div>
-                                <span className="text-cyan-400 font-semibold">⚡ Latency:</span>{' '}
-                                <span className="text-white">{taskDetail.latency}ms</span>
-                                {taskDetail.latencyIsEst && <span className="text-orange-400 text-[8px] ml-1">(Est.)</span>}
-                                <div className="text-[9px] text-[#58a6ff] pl-2 mt-0.5">{taskDetail.latencyFormula}</div>
-                              </div>
-                              <div>
-                                <span className="text-purple-400 font-semibold">🪙 Tokens:</span>{' '}
-                                <span className="text-white">{taskDetail.tokens.toLocaleString()}</span>
-                                {taskDetail.tokensIsEst && <span className="text-orange-400 text-[8px] ml-1">(Est.)</span>}
-                                <div className="text-[9px] text-[#bc8cff] pl-2 mt-0.5">{taskDetail.tokensFormula}</div>
-                              </div>
-                              <div>
-                                <span className="text-green-400 font-semibold">🎯 Confidence:</span>{' '}
-                                <span className="text-white">{taskDetail.confidence}%</span>
-                                {taskDetail.confidenceIsEst && <span className="text-orange-400 text-[8px] ml-1">(Est.)</span>}
-                                <div className="text-[9px] text-[#3fb950] pl-2 mt-0.5">{taskDetail.confidenceFormula}</div>
-                              </div>
-                              <div>
-                                <span className="text-orange-400 font-semibold">💵 Cost:</span>{' '}
-                                <span className="text-white">${taskDetail.cost.toFixed(6)}</span>
-                                {taskDetail.costIsEst && <span className="text-orange-400 text-[8px] ml-1">(Est.)</span>}
-                                <div className="text-[9px] text-[#ffab70] pl-2 mt-0.5">{taskDetail.costFormula}</div>
-                              </div>
+                            {task.result != null && (
+                              <pre className="text-[10px] font-mono text-muted-foreground whitespace-pre-wrap max-h-28 overflow-auto">
+                                {typeof task.result === 'string'
+                                  ? task.result
+                                  : JSON.stringify(task.result, null, 2)}
+                              </pre>
+                            )}
+                          </div>
+                        ))}
+                        {agentMetrics.tasksDetail.map((detail, idx) => (
+                          <div
+                            key={`formula-${idx}`}
+                            className="text-[10px] font-mono text-muted-foreground/90 space-y-1 border border-orion-hairline/70 rounded-md p-2"
+                          >
+                            <div>
+                              latency: {detail.latency}ms
+                              {detail.latencyIsEst ? ' (est.)' : ''} — {detail.latencyFormula}
+                            </div>
+                            <div>
+                              tokens: {detail.tokens}
+                              {detail.tokensIsEst ? ' (est.)' : ''} — {detail.tokensFormula}
+                            </div>
+                            <div>
+                              cost: ${detail.cost.toFixed(6)}
+                              {detail.costIsEst ? ' (est.)' : ''} — {detail.costFormula}
                             </div>
                           </div>
                         ))}
@@ -402,72 +365,25 @@ export function AgentDashboard({ plan, state, summary, memory, taskResults, metr
                     </motion.div>
                   )}
                 </AnimatePresence>
-              </div>
+              </motion.div>
+            );
+          })}
+        </div>
 
-              {/* Task Details - Prompt, Reasoning, Output */}
-              {tasks.length > 0 && (
-                <div className="pt-2 border-t border-[#21262d] space-y-2">
-                  {tasks.map((task) => (
-                    <div key={task.id} className="text-xs">
-                      <p className="text-[#8b949e] mb-1 font-medium">Task: {task.description}</p>
-                      {task.result != null && (
-                        <div className="bg-[#0d1117] rounded p-2 max-h-32 overflow-auto">
-                          <pre className="text-[#8b949e] whitespace-pre-wrap">
-                            {(typeof task.result === 'string' ? task.result : JSON.stringify(task.result, null, 2)) as string}
-                          </pre>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </motion.div>
-          );
-        })}
+        <div className="px-4 py-3 border-t border-orion-hairline grid grid-cols-4 gap-2">
+          <Stat label="Total" value={summary.totalTasks} />
+          <Stat label="Done" value={summary.completed} />
+          <Stat label="Failed" value={summary.failed} />
+          <Stat label="Pending" value={summary.pending} />
+        </div>
 
-        {/* Summary Stats */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="bg-[#0d1117] border border-[#30363d] rounded-lg p-4"
-        >
-          <h3 className="text-white font-medium text-sm mb-3">Overall Progress</h3>
-          <div className="space-y-2">
-            <div className="flex justify-between text-xs">
-              <span className="text-[#8b949e]">Completion</span>
-              <span className="text-cyan-400">
-                {Math.round(((summary.completed + summary.failed) / (summary.totalTasks || 1)) * 100)}%
-              </span>
-            </div>
-            <div className="h-2 bg-[#21262d] rounded-full overflow-hidden">
-              <div
-                className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 transition-all duration-500"
-                style={{
-                  width: `${Math.round(((summary.completed + summary.failed) / (summary.totalTasks || 1)) * 100)}%`,
-                }}
-              />
-            </div>
-            <div className="grid grid-cols-4 gap-2 pt-2">
-              <StatItem label="Total" value={summary.totalTasks} color="text-white" />
-              <StatItem label="Done" value={summary.completed} color="text-green-400" />
-              <StatItem label="Failed" value={summary.failed} color="text-red-400" />
-              <StatItem label="Pending" value={summary.pending} color="text-yellow-400" />
-            </div>
-          </div>
-        </motion.div>
-
-        {/* Shared Memory */}
         {Object.keys(memory).length > 0 && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="bg-[#0d1117] border border-[#30363d] rounded-lg p-4"
-          >
-            <h3 className="text-white font-medium text-sm mb-3">Shared Memory</h3>
-            <pre className="text-xs text-[#8b949e] font-mono overflow-auto max-h-40">
+          <div className="px-4 py-3 border-t border-orion-hairline">
+            <h3 className="text-xs font-medium text-muted-foreground mb-2">Shared memory</h3>
+            <pre className="text-[10px] font-mono text-muted-foreground overflow-auto max-h-36">
               {JSON.stringify(memory, null, 2)}
             </pre>
-          </motion.div>
+          </div>
         )}
       </div>
     </div>
@@ -476,16 +392,15 @@ export function AgentDashboard({ plan, state, summary, memory, taskResults, metr
 
 function StatusBadge({ status }: { status: AgentMetrics['status'] }) {
   const config = {
-    idle: { bg: 'bg-[#21262d]', text: 'text-[#8b949e]', label: 'Idle' },
-    running: { bg: 'bg-cyan-900/30', text: 'text-cyan-400', label: 'Running' },
-    completed: { bg: 'bg-green-900/30', text: 'text-green-400', label: 'Done' },
-    error: { bg: 'bg-red-900/30', text: 'text-red-400', label: 'Error' },
+    idle: { text: 'text-muted-foreground', label: 'Idle' },
+    running: { text: 'text-orion-ink', label: 'Running' },
+    completed: { text: 'text-emerald-400/90', label: 'Done' },
+    error: { text: 'text-red-400/90', label: 'Error' },
   };
-
-  const { bg, text, label } = config[status];
+  const { text, label } = config[status];
 
   return (
-    <span className={`px-2 py-1 rounded-full text-xs font-medium ${bg} ${text} flex items-center gap-1`}>
+    <span className={`inline-flex items-center gap-1 text-[10px] font-medium ${text}`}>
       {status === 'running' && <Loader2 className="w-3 h-3 animate-spin" />}
       {status === 'completed' && <CheckCircle className="w-3 h-3" />}
       {status === 'error' && <XCircle className="w-3 h-3" />}
@@ -494,33 +409,20 @@ function StatusBadge({ status }: { status: AgentMetrics['status'] }) {
   );
 }
 
-function MetricCard({
-  icon: Icon,
-  label,
-  value,
-  color,
-}: {
-  icon: any;
-  label: string;
-  value: string | number;
-  color: string;
-}) {
+function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center gap-2 bg-[#161b22] rounded p-2">
-      <Icon className={`w-4 h-4 ${color}`} />
-      <div className="flex-1 min-w-0">
-        <p className="text-[#8b949e] text-xs">{label}</p>
-        <p className={`text-white text-sm font-medium ${color}`}>{value}</p>
-      </div>
+    <div>
+      <p className="text-muted-foreground/80">{label}</p>
+      <p className="font-mono text-foreground tabular-nums truncate">{value}</p>
     </div>
   );
 }
 
-function StatItem({ label, value, color }: { label: string; value: number; color: string }) {
+function Stat({ label, value }: { label: string; value: number }) {
   return (
     <div className="text-center">
-      <p className={`text-lg font-bold ${color}`}>{value}</p>
-      <p className="text-[#8b949e] text-xs">{label}</p>
+      <p className="text-sm font-semibold tabular-nums text-foreground">{value}</p>
+      <p className="text-[10px] text-muted-foreground">{label}</p>
     </div>
   );
 }

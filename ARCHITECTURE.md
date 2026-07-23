@@ -1,6 +1,6 @@
-# Orion Architecture Guide
+# Orion Architecture
 
-This document describes the architecture of Orion, an open-source AI Operating System powered entirely by open-source models.
+Orion is a multi-agent orchestration console: it plans user objectives, runs specialized LLM agents, streams execution over SSE, and materializes code/docs into a virtual filesystem for preview and export.
 
 ## System Architecture
 
@@ -214,31 +214,31 @@ async chat(model, messages, systemPrompt): Promise<string>
 async stream(model, messages, systemPrompt): Promise<AsyncIterable>
 ```
 
-**Supported Models:**
-- DeepSeek V4 Pro (`deepseek/deepseek-chat`)
-- DeepSeek R1 (`deepseek/deepseek-r1`)
-- Qwen 3 Coder (`qwen/qwen-3-coder-235b`)
-- GLM-5.2 (`glm-5-2`)
-- Kimi K2.7 (`kimi/kimi-k2.7`)
-- MiniMax M3 (`minimax/minimax-m3`)
+**Supported Models (defaults — see `model-config.ts` / `model-router.ts`):**
+- DeepSeek Chat V3.1 free (`deepseek/deepseek-chat-v3.1:free`)
+- DeepSeek R1 free (`deepseek/deepseek-r1:free`)
+- Qwen3 Coder free (`qwen/qwen3-coder:free`)
+- Qwen3 Plus free (`qwen/qwen3.6-plus:free`)
+- MiniMax M2.5 free (`minimax/minimax-m2.5:free`)
+- OpenRouter Auto (`openrouter/auto`)
 
 ### 7. Model Configuration (`lib/orion/model-config.ts`)
-Centralized model assignment for each agent.
+Centralized default model assignment for each agent.
 
 **Default Configuration:**
 ```typescript
 AGENT_MODELS = {
-  planner: 'deepseek/deepseek-chat',
-  engineering: 'qwen/qwen-3-coder-235b',
-  research: 'glm-5-2',
-  marketing: 'deepseek/deepseek-chat',
+  planner: 'deepseek/deepseek-chat-v3.1:free',
+  engineering: 'qwen/qwen3-coder:free',
+  research: 'deepseek/deepseek-r1:free',
+  marketing: 'qwen/qwen3.6-plus:free',
 }
 ```
 
 **Override via Environment:**
 ```env
-PLANNER_MODEL=deepseek/deepseek-r1
-ENGINEERING_MODEL=qwen/qwen-3-coder-235b
+PLANNER_MODEL=deepseek/deepseek-r1:free
+ENGINEERING_MODEL=qwen/qwen3-coder:free
 ```
 
 ## Execution Flow

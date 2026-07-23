@@ -38,10 +38,10 @@ export function CodeEditor({ file }: CodeEditorProps) {
 
   if (!file || file.type === 'folder') {
     return (
-      <div className="h-full flex items-center justify-center text-[#8b949e]">
+      <div className="h-full flex items-center justify-center text-muted-foreground">
         <div className="text-center">
-          <p className="text-lg mb-2">No file selected</p>
-          <p className="text-sm">Select a file from the explorer to view its contents</p>
+          <p className="text-sm mb-1">No file selected</p>
+          <p className="text-xs text-muted-foreground/80">Pick a file from the explorer</p>
         </div>
       </div>
     );
@@ -49,8 +49,8 @@ export function CodeEditor({ file }: CodeEditorProps) {
 
   return (
     <div className="h-full">
-      <div className="h-10 bg-[#161b22] border-b border-[#30363d] flex items-center px-4">
-        <span className="text-white text-sm font-medium">{file.name}</span>
+      <div className="h-9 bg-orion-elevated/60 border-b border-orion-hairline flex items-center px-3">
+        <span className="text-xs font-mono text-muted-foreground">{file.name}</span>
       </div>
       <Editor
         height="calc(100% - 40px)"

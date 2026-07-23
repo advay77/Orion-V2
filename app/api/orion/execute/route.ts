@@ -95,31 +95,52 @@ export async function POST(request: NextRequest) {
       // Get task execution logs
       const taskLogs = (memory as any).taskExecutionLog || [];
 
-      // Process artifacts from all task results
+      // Build artifacts primarily from engineering output (research/marketing
+      // prose used to pollute the VFS with random pathless "files").
       const engineResults: any[] = [];
       const taskResults: Record<string, any> = {};
 
-      for (const task of plan.tasks) {
-        if (task.result) {
-          const resultStr =
-            typeof task.result === 'string' ? task.result : JSON.stringify(task.result);
-          const engineResult = artifactEngine.process(resultStr);
-          if (engineResult.vfs.size > 0) {
+      const artifactTasks = [
+        ...plan.tasks.filter((t) => t.assignedTo === 'engineering' && t.result),
+        // Fallback: if planner somehow skipped engineering, still try any coded result
+        ...plan.tasks.filter((t) => t.assignedTo !== 'engineering' && t.result),
+      ];
+
+      const seenTaskIds = new Set<string>();
+      for (const task of artifactTasks) {
+        if (seenTaskIds.has(task.id)) continue;
+        seenTaskIds.add(task.id);
+
+        const resultStr =
+          typeof task.result === 'string' ? task.result : JSON.stringify(task.result);
+        const looksLikeCode =
+          task.assignedTo === 'engineering' ||
+          /```[\w+#.-]*.*(?:path|file)\s*=/.test(resultStr) ||
+          /```[\w./-]+\.[a-zA-Z0-9]+/.test(resultStr);
+
+        const engineResult = looksLikeCode ? artifactEngine.process(resultStr) : null;
+        if (engineResult && engineResult.vfs.size > 0) {
+          // Prefer engineering results first in merge order
+          if (task.assignedTo === 'engineering') {
+            engineResults.unshift(engineResult);
+          } else {
             engineResults.push(engineResult);
           }
-
-          taskResults[task.id] = {
-            description: task.description,
-            status: task.status,
-            result: resultStr.substring(0, 500),
-            fullResult: task.result,
-            artifacts: Array.from(engineResult.vfs.keys()),
-          };
         }
+
+        taskResults[task.id] = {
+          description: task.description,
+          status: task.status,
+          agent: task.assignedTo,
+          result: resultStr.substring(0, 500),
+          fullResult: task.result,
+          artifacts: engineResult ? Array.from(engineResult.vfs.keys()) : [],
+        };
       }
 
       let finalResult: any = null;
       if (engineResults.length > 0) {
+        // Merge engineering-first results; engine prefers richer structured trees
         finalResult = artifactEngine.merge(engineResults);
       }
 

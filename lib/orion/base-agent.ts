@@ -32,13 +32,12 @@ export abstract class BaseAgent {
   }
 
   private getFallbackModels(): string[] {
-    // Define fallback models for each agent type
     const fallbackMap: Record<AgentType, string[]> = {
-      engineering: ['deepseek/deepseek-chat', 'deepseek/deepseek-r1'],
-      research: ['deepseek/deepseek-r1', 'deepseek/deepseek-chat'],
-      marketing: ['kimi/kimi-k2.7', 'glm-5-2'],
+      engineering: ['qwen/qwen3-coder:free', 'deepseek/deepseek-chat-v3.1:free', 'openrouter/auto'],
+      research: ['deepseek/deepseek-r1:free', 'qwen/qwen3.6-plus:free', 'openrouter/auto'],
+      marketing: ['qwen/qwen3.6-plus:free', 'deepseek/deepseek-chat-v3.1:free', 'openrouter/auto'],
     };
-    return fallbackMap[this.agentType] || ['deepseek/deepseek-chat'];
+    return fallbackMap[this.agentType] || ['deepseek/deepseek-chat-v3.1:free', 'openrouter/auto'];
   }
 
   protected async tryPreferredModel(

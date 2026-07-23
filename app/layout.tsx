@@ -1,46 +1,64 @@
 import { Analytics } from '@vercel/analytics/next'
 import type { Metadata, Viewport } from 'next'
-import { Inter } from 'next/font/google'
+import { IBM_Plex_Mono, IBM_Plex_Sans, Syne } from 'next/font/google'
 import './globals.css'
 
-const inter = Inter({
+const syne = Syne({
   subsets: ['latin'],
-  weight: ['400', '500', '600', '700', '800', '900'],
-  variable: '--font-inter',
+  weight: ['500', '600', '700', '800'],
+  variable: '--font-syne',
+})
+
+const plexSans = IBM_Plex_Sans({
+  subsets: ['latin'],
+  weight: ['400', '500', '600', '700'],
+  variable: '--font-plex-sans',
+})
+
+const plexMono = IBM_Plex_Mono({
+  subsets: ['latin'],
+  weight: ['400', '500'],
+  variable: '--font-plex-mono',
 })
 
 export const metadata: Metadata = {
   title: {
-    default: 'ORION AI — Multi-Agent Development OS',
-    template: '%s | ORION AI',
+    default: 'Orion — Multi-Agent Orchestration Console',
+    template: '%s | Orion',
   },
   description:
-    'ORION AI is a multi-agent AI operating system that plans, engineers, researches, and markets your projects — powered by the world\'s best open-source models via OpenRouter.',
-  keywords: ['AI', 'agents', 'code generation', 'engineering', 'AI OS', 'OpenRouter', 'LLM'],
-  authors: [{ name: 'ORION AI' }],
+    'Orion plans objectives across specialized LLM agents, streams execution in real time, and turns model output into a validated project workspace you can preview and export.',
+  keywords: [
+    'multi-agent',
+    'LLM orchestration',
+    'code generation',
+    'OpenRouter',
+    'artifact engine',
+    'SSE',
+  ],
+  authors: [{ name: 'Orion' }],
   openGraph: {
     type: 'website',
-    title: 'ORION AI — Multi-Agent Development OS',
-    description: 'AI agents that plan, build, research, and market your next project.',
-    siteName: 'ORION AI',
+    title: 'Orion — Multi-Agent Orchestration Console',
+    description:
+      'Plan, execute, and export projects with specialized agents over open-source models.',
+    siteName: 'Orion',
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'ORION AI — Multi-Agent Development OS',
-    description: 'AI agents that plan, build, research, and market your next project.',
+    title: 'Orion — Multi-Agent Orchestration Console',
+    description:
+      'Plan, execute, and export projects with specialized agents over open-source models.',
   },
   robots: {
     index: true,
     follow: true,
   },
-};
+}
 
 export const viewport: Viewport = {
-  colorScheme: 'light dark',
-  themeColor: [
-    { media: '(prefers-color-scheme: light)', color: 'white' },
-    { media: '(prefers-color-scheme: dark)', color: '#0d1117' },
-  ],
+  colorScheme: 'dark',
+  themeColor: '#12141a',
 }
 
 export default function RootLayout({
@@ -49,8 +67,8 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en" className={inter.variable}>
-      <body className="antialiased font-sans">
+    <html lang="en" className={`${syne.variable} ${plexSans.variable} ${plexMono.variable} dark`}>
+      <body className="antialiased font-sans bg-background text-foreground">
         {children}
         {process.env.NODE_ENV === 'production' && <Analytics />}
       </body>
