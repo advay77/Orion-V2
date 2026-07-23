@@ -144,8 +144,7 @@ export default function App() { return <main>Hello</main> }
       const objective = lastPlan?.objective || '';
       const systemPrompt = this.getSystemPrompt(assignedSkill);
 
-      const response = await this.openRouterClient.chat(
-        this.model,
+      const response = await this.chatForTask(
         [
           {
             role: 'user',
@@ -157,7 +156,7 @@ ${assignedSkill ? `Assigned skill: ${assignedSkill}` : ''}
 
 Generate a coherent, structured project for this objective.
 Return path-tagged code fences for every file, then a brief JSON summary.
-Do not omit the code fences.`,
+Do not omit the code fences. Keep output focused — only necessary files.`,
           },
         ],
         systemPrompt,
@@ -176,6 +175,10 @@ Do not omit the code fences.`,
         // summary optional
       }
 
+      if (response.usage) {
+        this.sharedMemory.set(`task_${context.taskId}_usage`, response.usage);
+      }
+      this.sharedMemory.set(`task_${context.taskId}_model`, this.model);
       this.sharedMemory.set('engineering_task_result', response.content);
 
       return {
@@ -191,8 +194,7 @@ Do not omit the code fences.`,
 
   async analyzeArchitecture(objective: string): Promise<string> {
     const systemPrompt = this.getSystemPrompt();
-    const response = await this.openRouterClient.chat(
-      this.model,
+    const response = await this.chatForTask(
       [{ role: 'user', content: `Analyze the architecture needed for: ${objective}` }],
       systemPrompt,
     );
@@ -201,8 +203,7 @@ Do not omit the code fences.`,
 
   async generateImplementationPlan(requirements: string): Promise<string> {
     const systemPrompt = this.getSystemPrompt();
-    const response = await this.openRouterClient.chat(
-      this.model,
+    const response = await this.chatForTask(
       [{ role: 'user', content: `Create a detailed implementation plan for: ${requirements}` }],
       systemPrompt,
     );

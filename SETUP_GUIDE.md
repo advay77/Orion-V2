@@ -17,14 +17,16 @@ Create `.env` in the project root:
 OPENROUTER_API_KEY=sk-or-your-key
 ```
 
-Optional overrides (defaults in `lib/orion/model-config.ts`):
+Optional overrides (defaults are task-fit workhorses, not free-only):
 
 ```env
-PLANNER_MODEL=deepseek/deepseek-chat-v3.1:free
-ENGINEERING_MODEL=qwen/qwen3-coder:free
-RESEARCH_MODEL=deepseek/deepseek-r1:free
-MARKETING_MODEL=qwen/qwen3.6-plus:free
+PLANNER_MODEL=deepseek/deepseek-chat
+ENGINEERING_MODEL=anthropic/claude-sonnet-4
+RESEARCH_MODEL=deepseek/deepseek-r1
+MARKETING_MODEL=google/gemini-2.5-flash
 ```
+
+UI priority control (`balanced` / `quality` / `speed` / `cost`) changes how the router scores specialty, quality, latency, and $.
 
 ## Run
 

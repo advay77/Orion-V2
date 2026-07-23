@@ -2,6 +2,13 @@ import { AgentContext, AgentResponse, AgentType } from './types';
 import { SharedMemory } from './shared-memory';
 import { OpenRouterClient } from './openrouter-client';
 
+export interface AgentRuntimeConfig {
+  model: string;
+  fallbacks?: string[];
+  maxTokens?: number;
+  temperature?: number;
+}
+
 export abstract class BaseAgent {
   protected agentType: AgentType;
   protected model: string;
@@ -9,8 +16,15 @@ export abstract class BaseAgent {
   protected sharedMemory: SharedMemory;
   protected preferredModel: string;
   protected fallbackModels: string[];
+  protected maxTokens: number = 4096;
+  protected temperature: number = 0.4;
 
-  constructor(agentType: AgentType, model: string, openRouterClient: OpenRouterClient, sharedMemory: SharedMemory) {
+  constructor(
+    agentType: AgentType,
+    model: string,
+    openRouterClient: OpenRouterClient,
+    sharedMemory: SharedMemory,
+  ) {
     this.agentType = agentType;
     this.model = model;
     this.preferredModel = model;
@@ -21,29 +35,58 @@ export abstract class BaseAgent {
 
   abstract getSystemPrompt(): string;
 
-  // Agent-specific hardcoded confidence values
+  /**
+   * Apply ModelRouter selection for this task (must be called before execute).
+   */
+  configureRuntime(config: AgentRuntimeConfig): void {
+    this.model = config.model;
+    this.preferredModel = config.model;
+    if (config.fallbacks?.length) {
+      this.fallbackModels = config.fallbacks;
+    }
+    if (config.maxTokens != null) this.maxTokens = config.maxTokens;
+    if (config.temperature != null) this.temperature = config.temperature;
+  }
+
+  getActiveModel(): string {
+    return this.model;
+  }
+
   getAgentConfidence(): number {
     const confidenceMap: Record<AgentType, number> = {
       engineering: 0.85,
-      research: 0.90,
-      marketing: 0.80,
+      research: 0.9,
+      marketing: 0.8,
     };
     return confidenceMap[this.agentType] || 0.85;
   }
 
   private getFallbackModels(): string[] {
     const fallbackMap: Record<AgentType, string[]> = {
-      engineering: ['qwen/qwen3-coder:free', 'deepseek/deepseek-chat-v3.1:free', 'openrouter/auto'],
-      research: ['deepseek/deepseek-r1:free', 'qwen/qwen3.6-plus:free', 'openrouter/auto'],
-      marketing: ['qwen/qwen3.6-plus:free', 'deepseek/deepseek-chat-v3.1:free', 'openrouter/auto'],
+      engineering: ['deepseek/deepseek-chat', 'qwen/qwen3-coder', 'google/gemini-2.5-pro', 'openrouter/auto'],
+      research: ['deepseek/deepseek-r1', 'google/gemini-2.5-pro', 'openai/o4-mini', 'openrouter/auto'],
+      marketing: ['google/gemini-2.5-flash', 'openai/gpt-4.1-mini', 'deepseek/deepseek-chat', 'openrouter/auto'],
     };
-    return fallbackMap[this.agentType] || ['deepseek/deepseek-chat-v3.1:free', 'openrouter/auto'];
+    return fallbackMap[this.agentType] || ['deepseek/deepseek-chat', 'openrouter/auto'];
+  }
+
+  /** Chat using the runtime-selected model + token/temperature budget. */
+  protected async chatForTask(
+    messages: { role: 'user' | 'assistant'; content: string }[],
+    systemPrompt: string,
+  ) {
+    return this.openRouterClient.chat(
+      this.model,
+      messages,
+      systemPrompt,
+      this.maxTokens,
+      this.temperature,
+    );
   }
 
   protected async tryPreferredModel(
-    messages: any[],
+    messages: { role: 'user' | 'assistant'; content: string }[],
     systemPrompt: string,
-    maxRetries: number = 2
   ): Promise<{ result: string; usage?: any; modelUsed: string }> {
     const modelsToTry = [this.preferredModel, ...this.fallbackModels];
     let lastError: Error | null = null;
@@ -51,14 +94,16 @@ export abstract class BaseAgent {
     for (let i = 0; i < modelsToTry.length; i++) {
       const model = modelsToTry[i];
       try {
-        const response = await this.openRouterClient.chat(model, messages, systemPrompt);
+        const response = await this.openRouterClient.chat(
+          model,
+          messages,
+          systemPrompt,
+          this.maxTokens,
+        );
+        this.model = model;
         return { result: response.content, usage: response.usage, modelUsed: model };
       } catch (error) {
         lastError = error instanceof Error ? error : new Error('Unknown error');
-        if (i < modelsToTry.length - 1) {
-          // Continue to next model
-          continue;
-        }
       }
     }
 
@@ -73,18 +118,16 @@ export abstract class BaseAgent {
         content: this.buildPrompt(context),
       };
 
-      const response = await this.openRouterClient.chat(this.model, [userMessage], systemPrompt);
-      
-      // Store usage information in shared memory
+      const response = await this.chatForTask([userMessage], systemPrompt);
+
       if (response.usage) {
         this.sharedMemory.set(`task_${context.taskId}_usage`, response.usage);
       }
 
       const parsedResponse = this.parseResponse(response.content, context.taskId);
-
-      // Update shared memory with results
       this.sharedMemory.set(`task_${context.taskId}_result`, parsedResponse.result);
       this.sharedMemory.set(`task_${context.taskId}_reasoning`, parsedResponse.reasoning);
+      this.sharedMemory.set(`task_${context.taskId}_model`, this.model);
 
       return parsedResponse;
     } catch (error) {
@@ -98,21 +141,18 @@ export abstract class BaseAgent {
   }
 
   protected buildPrompt(context: AgentContext): string {
-    // Very simple prompt for speed!
-    return `
-Task: ${context.taskId}
+    return `Task: ${context.taskId}
 
-Please complete this task. Return JSON only:
+Complete this task concisely. Prefer short, structured output.
+Return JSON:
 {
   "result": "result here",
-  "reasoning": "reasoning here",
+  "reasoning": "brief reasoning",
   "success": true
-}
-    `;
+}`;
   }
 
   protected parseResponse(response: string, taskId: string): AgentResponse {
-    // If empty string, return default success response
     if (!response.trim()) {
       return {
         taskId,
@@ -123,7 +163,6 @@ Please complete this task. Return JSON only:
     }
 
     try {
-      // Extract JSON from response (handle markdown code blocks)
       const jsonMatch = response.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
         return {
@@ -142,7 +181,7 @@ Please complete this task. Return JSON only:
         nextSteps: parsed.nextSteps,
         success: parsed.success !== false,
       };
-    } catch (error) {
+    } catch {
       return {
         taskId,
         result: response,

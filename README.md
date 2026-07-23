@@ -44,7 +44,21 @@ Objective
   → SSE stream → console UI (agents + workspace)
 ```
 
-Defaults live in [`lib/orion/model-config.ts`](lib/orion/model-config.ts). Runtime routing / ranking lives in [`lib/orion/model-router.ts`](lib/orion/model-router.ts).
+## Models
+
+Orion routes per agent + priority (`balanced` / `quality` / `speed` / `cost`):
+
+| Role | Typical pick (balanced) | Why |
+|------|-------------------------|-----|
+| Engineering | `deepseek/deepseek-chat` / Claude Sonnet / GPT-4.1 | coding quality vs $ |
+| Research | `deepseek/deepseek-r1` / Gemini Pro | reasoning |
+| Marketing | `google/gemini-2.5-flash` | fast + cheap writing |
+| Fallbacks | catalog workhorses → `openrouter/auto` | reliability |
+
+Free `:free` models are **budget** options (cost priority / last resort), not the default.
+Override with `ENGINEERING_MODEL`, `RESEARCH_MODEL`, etc.
+
+Catalog: [`lib/orion/model-config.ts`](lib/orion/model-config.ts). Router: [`lib/orion/model-router.ts`](lib/orion/model-router.ts).
 
 ## API
 

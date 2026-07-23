@@ -1,24 +1,217 @@
-// OpenRouter model IDs used by Orion.
-// Keep these aligned with ModelRouter rankings in model-router.ts.
+/**
+ * Orion model catalog — task-fit first, not open-source-only.
+ * IDs are OpenRouter slugs. Env overrides still win via AGENT_MODELS / *_MODEL.
+ */
 
-export const MODEL_CONFIG = {
-  DEEPSEEK_CHAT_FREE: 'deepseek/deepseek-chat-v3.1:free',
-  DEEPSEEK_R1_FREE: 'deepseek/deepseek-r1:free',
-  QWEN3_CODER_FREE: 'qwen/qwen3-coder:free',
-  QWEN3_PLUS_FREE: 'qwen/qwen3.6-plus:free',
-  MINIMAX_FREE: 'minimax/minimax-m2.5:free',
-  OPENROUTER_AUTO: 'openrouter/auto',
-} as const;
+export type AgentRole = 'planner' | 'engineering' | 'research' | 'marketing';
+
+export interface CatalogModel {
+  id: string;
+  /** Roles this model is a strong default for */
+  specialties: AgentRole[];
+  capability: number; // 1-10
+  quality: number; // 1-10
+  speed: number; // 1-10
+  /** USD per 1M prompt tokens */
+  promptPrice: number;
+  /** USD per 1M completion tokens */
+  completionPrice: number;
+  contextWindow: number;
+  /** Suggested generation cap — keeps token spend down */
+  maxTokens: number;
+  temperature: number;
+  /** Prefer for this priority when specialties match */
+  tier: 'flagship' | 'workhorse' | 'fast' | 'budget';
+}
 
 /**
- * Default agent model assignments (overridable via env).
- * ModelRouter may still pick a different candidate based on priority.
+ * Curated pool: best-in-class for coding / reasoning / writing,
+ * plus cheaper workhorses and budget options for cost/speed modes.
  */
+export const MODEL_CATALOG: CatalogModel[] = [
+  // ── Engineering / coding ──────────────────────────────────────────
+  {
+    id: 'deepseek/deepseek-chat',
+    specialties: ['engineering', 'planner', 'marketing'],
+    capability: 9,
+    quality: 9,
+    speed: 7,
+    promptPrice: 0.14,
+    completionPrice: 0.28,
+    contextWindow: 128000,
+    maxTokens: 8192,
+    temperature: 0.2,
+    tier: 'workhorse',
+  },
+  {
+    id: 'anthropic/claude-sonnet-4',
+    specialties: ['engineering', 'planner', 'research'],
+    capability: 10,
+    quality: 10,
+    speed: 6,
+    promptPrice: 3,
+    completionPrice: 15,
+    contextWindow: 200000,
+    maxTokens: 8192,
+    temperature: 0.2,
+    tier: 'flagship',
+  },
+  {
+    id: 'openai/gpt-4.1',
+    specialties: ['engineering', 'planner', 'marketing'],
+    capability: 9,
+    quality: 9,
+    speed: 6,
+    promptPrice: 2,
+    completionPrice: 8,
+    contextWindow: 128000,
+    maxTokens: 8192,
+    temperature: 0.25,
+    tier: 'flagship',
+  },
+  // ── Reasoning / research ──────────────────────────────────────────
+  {
+    id: 'google/gemini-2.5-pro',
+    specialties: ['engineering', 'research', 'planner'],
+    capability: 9,
+    quality: 9,
+    speed: 6,
+    promptPrice: 1.25,
+    completionPrice: 10,
+    contextWindow: 1000000,
+    maxTokens: 4096,
+    temperature: 0.3,
+    tier: 'workhorse',
+  },
+  {
+    id: 'deepseek/deepseek-r1',
+    specialties: ['research', 'planner'],
+    capability: 10,
+    quality: 10,
+    speed: 4,
+    promptPrice: 0.55,
+    completionPrice: 2.19,
+    contextWindow: 128000,
+    maxTokens: 4096,
+    temperature: 0.3,
+    tier: 'flagship',
+  },
+  {
+    id: 'deepseek/deepseek-chat',
+    specialties: ['engineering', 'planner', 'marketing', 'research'],
+    capability: 9,
+    quality: 9,
+    speed: 7,
+    promptPrice: 0.14,
+    completionPrice: 0.28,
+    contextWindow: 128000,
+    maxTokens: 8192,
+    temperature: 0.2,
+    tier: 'workhorse',
+  },
+  {
+    id: 'openai/o4-mini',
+    specialties: ['research', 'planner'],
+    capability: 9,
+    quality: 9,
+    speed: 7,
+    promptPrice: 1.1,
+    completionPrice: 4.4,
+    contextWindow: 200000,
+    maxTokens: 4096,
+    temperature: 0.3,
+    tier: 'workhorse',
+  },
+
+  // ── Writing / marketing + fast paths ──────────────────────────────
+  {
+    id: 'google/gemini-2.5-flash',
+    specialties: ['marketing', 'research', 'planner'],
+    capability: 8,
+    quality: 8,
+    speed: 10,
+    promptPrice: 0.15,
+    completionPrice: 0.6,
+    contextWindow: 1000000,
+    maxTokens: 3072,
+    temperature: 0.5,
+    tier: 'fast',
+  },
+  {
+    id: 'openai/gpt-4.1-mini',
+    specialties: ['marketing', 'research'],
+    capability: 8,
+    quality: 8,
+    speed: 9,
+    promptPrice: 0.4,
+    completionPrice: 1.6,
+    contextWindow: 128000,
+    maxTokens: 3072,
+    temperature: 0.5,
+    tier: 'fast',
+  },
+  {
+    id: 'anthropic/claude-haiku-4.5',
+    specialties: ['marketing', 'planner'],
+    capability: 8,
+    quality: 8,
+    speed: 9,
+    promptPrice: 1,
+    completionPrice: 5,
+    contextWindow: 200000,
+    maxTokens: 3072,
+    temperature: 0.5,
+    tier: 'fast',
+  },
+
+  // ── Budget / free fallbacks (cost priority + last resort) ─────────
+  {
+    id: 'deepseek/deepseek-chat-v3.1:free',
+    specialties: ['engineering', 'planner', 'marketing', 'research'],
+    capability: 8,
+    quality: 8,
+    speed: 6,
+    promptPrice: 0,
+    completionPrice: 0,
+    contextWindow: 64000,
+    maxTokens: 6144,
+    temperature: 0.3,
+    tier: 'budget',
+  },
+  {
+    id: 'qwen/qwen3-coder:free',
+    specialties: ['engineering'],
+    capability: 8,
+    quality: 8,
+    speed: 5,
+    promptPrice: 0,
+    completionPrice: 0,
+    contextWindow: 32000,
+    maxTokens: 6144,
+    temperature: 0.2,
+    tier: 'budget',
+  },
+  {
+    id: 'openrouter/auto',
+    specialties: ['engineering', 'research', 'marketing', 'planner'],
+    capability: 8,
+    quality: 8,
+    speed: 7,
+    promptPrice: 0.5,
+    completionPrice: 1.5,
+    contextWindow: 200000,
+    maxTokens: 6144,
+    temperature: 0.4,
+    tier: 'budget',
+  },
+];
+
+/** Default preferred model per agent when env is unset (workhorse, not free). */
 export const AGENT_MODELS = {
-  planner: MODEL_CONFIG.DEEPSEEK_CHAT_FREE,
-  engineering: MODEL_CONFIG.QWEN3_CODER_FREE,
-  research: MODEL_CONFIG.DEEPSEEK_R1_FREE,
-  marketing: MODEL_CONFIG.QWEN3_PLUS_FREE,
+  planner: 'deepseek/deepseek-chat',
+  engineering: 'deepseek/deepseek-chat',
+  research: 'deepseek/deepseek-r1',
+  marketing: 'google/gemini-2.5-flash',
 } as const;
 
 export type AgentModelType = keyof typeof AGENT_MODELS;
@@ -27,11 +220,24 @@ export function getAgentModel(agent: AgentModelType): string {
   return AGENT_MODELS[agent];
 }
 
-export const MODEL_DESCRIPTIONS: Record<string, string> = {
-  [MODEL_CONFIG.DEEPSEEK_CHAT_FREE]: 'DeepSeek Chat V3.1 (free) — general reasoning and planning',
-  [MODEL_CONFIG.DEEPSEEK_R1_FREE]: 'DeepSeek R1 (free) — deeper analysis',
-  [MODEL_CONFIG.QWEN3_CODER_FREE]: 'Qwen3 Coder (free) — code generation',
-  [MODEL_CONFIG.QWEN3_PLUS_FREE]: 'Qwen3 Plus (free) — writing and general tasks',
-  [MODEL_CONFIG.MINIMAX_FREE]: 'MiniMax M2.5 (free) — fast / cost-oriented',
-  [MODEL_CONFIG.OPENROUTER_AUTO]: 'OpenRouter Auto — provider fallback',
-};
+export function getCatalogEntry(modelId: string): CatalogModel | undefined {
+  return MODEL_CATALOG.find((m) => m.id === modelId);
+}
+
+export const MODEL_DESCRIPTIONS: Record<string, string> = Object.fromEntries(
+  MODEL_CATALOG.map((m) => [
+    m.id,
+    `${m.id} · ${m.tier} · q${m.quality}/c${m.capability}/s${m.speed} · $${m.promptPrice}/$${m.completionPrice} per 1M`,
+  ]),
+);
+
+/** @deprecated use MODEL_CATALOG — kept for older imports */
+export const MODEL_CONFIG = {
+  DEEPSEEK_CHAT: 'deepseek/deepseek-chat',
+  DEEPSEEK_R1: 'deepseek/deepseek-r1',
+  CLAUDE_SONNET: 'anthropic/claude-sonnet-4',
+  GPT_4_1: 'openai/gpt-4.1',
+  GEMINI_FLASH: 'google/gemini-2.5-flash',
+  GEMINI_PRO: 'google/gemini-2.5-pro',
+  OPENROUTER_AUTO: 'openrouter/auto',
+} as const;

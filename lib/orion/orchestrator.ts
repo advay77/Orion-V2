@@ -171,11 +171,25 @@ export class Orchestrator {
           priority: priority,
         });
 
+        // IMPORTANT: actually apply the routed model (was previously metadata-only)
+        const activeModel =
+          attempt === 0
+            ? modelSelection.selectedModel
+            : modelSelection.fallbackModels[attempt - 1] || modelSelection.selectedModel;
+
+        agent.configureRuntime({
+          model: activeModel,
+          fallbacks: modelSelection.fallbackModels,
+          maxTokens: modelSelection.maxTokens,
+          temperature: modelSelection.temperature,
+        });
+
         // Store task metadata
         this.sharedMemory.set(`task_${task.id}`, {
           ...task,
-          selectedModel: modelSelection.selectedModel,
+          selectedModel: activeModel,
           fallbackModel: modelSelection.fallbackModels[0],
+          selectionReason: modelSelection.reason,
         });
 
         // Mark agent as running
@@ -183,39 +197,31 @@ export class Orchestrator {
 
         // Execute task with selected model
         const response = await agent.execute({
-            planId: plan.id,
-            taskId: task.id,
-            agentType: task.assignedTo,
-            conversationHistory: [],
-            sharedMemory: this.sharedMemory.getAll(),
-          });
+          planId: plan.id,
+          taskId: task.id,
+          agentType: task.assignedTo,
+          conversationHistory: [],
+          sharedMemory: this.sharedMemory.getAll(),
+        });
 
-          const latency = Date.now() - startTime;
+        const latency = Date.now() - startTime;
 
-          if (response.success) {
-            // Get token usage from shared memory
-            const usage = this.sharedMemory.get(`task_${task.id}_usage`) as any;
-            
-            // Calculate actual cost using CostEngine
-            const resultStr = typeof response.result === 'string' ? response.result : JSON.stringify(response.result);
-            const actualCost = CostEngine.calculateActualCost(
-              modelSelection.selectedModel,
-              usage,
-              resultStr.length
-            );
+        if (response.success) {
+          const usage = this.sharedMemory.get(`task_${task.id}_usage`) as any;
+          const modelUsed =
+            (this.sharedMemory.get(`task_${task.id}_model`) as string) || activeModel;
 
-          // Calculate tokens (real from usage or fallback estimate)
+          const resultStr =
+            typeof response.result === 'string' ? response.result : JSON.stringify(response.result);
+          const actualCost = CostEngine.calculateActualCost(modelUsed, usage, resultStr.length);
           const tokens = usage ? usage.total_tokens : CostEngine.estimateTokens(resultStr);
-
-          // Get agent-level confidence
           const agentInstance = this.agents.get(task.assignedTo);
           const agentConfidence = agentInstance ? agentInstance.getAgentConfidence() : 0.85;
 
-          // Log task execution metadata
           const metadata: TaskMetadata = {
             taskId: task.id,
             agent: task.assignedTo,
-            selectedModel: modelSelection.selectedModel,
+            selectedModel: modelUsed,
             fallbackModel: modelSelection.fallbackModels[0],
             tokens,
             latency,
@@ -238,7 +244,7 @@ export class Orchestrator {
             metadata,
           });
 
-          return; // Success, exit retry loop
+          return;
         } else {
           lastError = new Error(`Task failed: ${response.result}`);
           throw lastError;
@@ -247,17 +253,8 @@ export class Orchestrator {
         lastError = error instanceof Error ? error : new Error('Unknown error');
 
         if (attempt < maxRetries) {
-          // Try next fallback model
-          const fallbacks = this.modelRouter.selectModel({
-            agentType: task.assignedTo,
-            taskType: task.skill,
-            priority: 'quality',
-          }).fallbackModels;
-
-          if (fallbacks.length > attempt) {
-            await new Promise((resolve) => setTimeout(resolve, 1000)); // Wait before retry
-            continue;
-          }
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          continue;
         }
 
         // Final failure

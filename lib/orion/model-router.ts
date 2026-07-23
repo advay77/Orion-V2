@@ -1,31 +1,51 @@
 import { OpenRouterClient } from './openrouter-client';
 import { ConfidenceCalculator } from './confidence';
+import {
+  AGENT_MODELS,
+  CatalogModel,
+  MODEL_CATALOG,
+  AgentRole,
+  getCatalogEntry,
+} from './model-config';
 
 export interface ModelRanking {
   model: string;
-  capability: number; // 1-10
-  quality: number; // 1-10
-  speed: number; // 1-10
-  cost: number; // tokens/$
-  contextWindow: number; // tokens
+  capability: number;
+  quality: number;
+  speed: number;
+  /** Higher = cheaper (tokens per dollar-ish). Derived from pricing. */
+  cost: number;
+  contextWindow: number;
   available: boolean;
+  promptPrice: number;
+  completionPrice: number;
+  maxTokens: number;
+  temperature: number;
+  tier: CatalogModel['tier'];
+  specialties: AgentRole[];
 }
 
 export interface ModelSelection {
   selectedModel: string;
   fallbackModels: string[];
   reason: string;
-  confidence: number; // 0-1
-  estimatedLatency: number; // ms
-  estimatedCost: number; // $ per 1000 tokens
+  confidence: number;
+  estimatedLatency: number;
+  estimatedCost: number;
+  maxTokens: number;
+  temperature: number;
 }
 
 export interface RouterConfig {
-  agentType: 'engineering' | 'research' | 'marketing' | 'planner';
+  agentType: AgentRole;
   taskType?: string;
   priority?: 'speed' | 'quality' | 'cost' | 'balanced';
 }
 
+/**
+ * Picks the best model for the *job*, not "whatever is free/open-source".
+ * Scores specialty fit + quality/capability vs cost, latency, and token budget.
+ */
 export class ModelRouter {
   private openRouterClient: OpenRouterClient;
   private modelCache: Map<string, ModelRanking> = new Map();
@@ -36,194 +56,205 @@ export class ModelRouter {
   }
 
   private initializeModelRankings(): void {
-    // Initialize available models with their characteristics
-    const models: ModelRanking[] = [
-      // DeepSeek Chat V3.1 (free) - Best for reasoning
-      {
-        model: 'deepseek/deepseek-chat-v3.1:free',
-        capability: 9,
-        quality: 9,
-        speed: 7,
-        cost: 100000,
-        contextWindow: 64000,
-        available: true,
-      },
-      // DeepSeek R1 (free) - Expert reasoning
-      {
-        model: 'deepseek/deepseek-r1:free',
-        capability: 10,
-        quality: 10,
-        speed: 5,
-        cost: 100000,
-        contextWindow: 128000,
-        available: true,
-      },
-      // Qwen3 Coder (free) - Engineering specialist
-      {
-        model: 'qwen/qwen3-coder:free',
-        capability: 9,
-        quality: 9,
-        speed: 6,
-        cost: 100000,
-        contextWindow: 32000,
-        available: true,
-      },
-      // Qwen3 Plus (free) - General purpose
-      {
-        model: 'qwen/qwen3.6-plus:free',
-        capability: 8,
-        quality: 8,
-        speed: 8,
-        cost: 100000,
-        contextWindow: 32000,
-        available: true,
-      },
-      // MiniMax M2.5 (free) - Efficient
-      {
-        model: 'minimax/minimax-m2.5:free',
-        capability: 7,
-        quality: 7,
-        speed: 9,
-        cost: 100000,
-        contextWindow: 32000,
-        available: true,
-      },
-      // OpenRouter Auto - Fallback if needed
-      {
-        model: 'openrouter/auto',
-        capability: 8,
-        quality: 8,
-        speed: 8,
-        cost: 50000,
-        contextWindow: 200000,
-        available: true,
-      },
-    ];
+    for (const entry of MODEL_CATALOG) {
+      const blended = (entry.promptPrice + entry.completionPrice) / 2;
+      // cost score: higher is cheaper (used by legacy rank helpers)
+      const costScore = blended <= 0 ? 1_000_000 : Math.round(1_000_000 / Math.max(blended, 0.01));
 
-    models.forEach((model) => {
-      this.modelCache.set(model.model, model);
-    });
+      this.modelCache.set(entry.id, {
+        model: entry.id,
+        capability: entry.capability,
+        quality: entry.quality,
+        speed: entry.speed,
+        cost: costScore,
+        contextWindow: entry.contextWindow,
+        available: true,
+        promptPrice: entry.promptPrice,
+        completionPrice: entry.completionPrice,
+        maxTokens: entry.maxTokens,
+        temperature: entry.temperature,
+        tier: entry.tier,
+        specialties: entry.specialties,
+      });
+    }
   }
 
   selectModel(config: RouterConfig): ModelSelection {
-    const priority = config.priority || 'speed'; // Default to speed for faster execution
+    const priority = config.priority || 'balanced';
     const agentType = config.agentType;
+    const required = this.getRequiredCapability(agentType, config.taskType);
 
-    // Get agent-specific model preferences
-    const candidateModels = this.getCandidateModels(agentType);
+    const candidates = this.getCandidateModels(agentType, priority).filter(
+      (m) => m.available && m.capability >= Math.max(6, required - 2),
+    );
 
-    // Rank models based on priority
-    const rankedModels = this.rankModels(candidateModels, priority);
-
-    if (rankedModels.length === 0) {
-      throw new Error('No available models found');
+    if (candidates.length === 0) {
+      const auto = this.modelCache.get('openrouter/auto');
+      if (!auto) throw new Error('No available models found');
+      return this.toSelection(auto, [], agentType, priority, required);
     }
 
-    // Select best model
-    const selectedModel = rankedModels[0];
-    const fallbackModels = rankedModels.slice(1, 3).map((m) => m.model);
+    const ranked = this.rankModels(candidates, priority, agentType, required);
+    const selected = ranked[0];
+    const fallbacks = ranked.slice(1, 4).map((m) => m.model);
 
-    // Calculate confidence using ConfidenceCalculator
-    const requiredCapability = this.getRequiredCapability(agentType, config.taskType);
+    return this.toSelection(selected, fallbacks, agentType, priority, required);
+  }
+
+  private toSelection(
+    selected: ModelRanking,
+    fallbacks: string[],
+    agentType: AgentRole,
+    priority: string,
+    required: number,
+  ): ModelSelection {
     const confidenceResult = ConfidenceCalculator.calculateRouterConfidence(
-      selectedModel.capability,
-      requiredCapability,
-      0 // ambiguity - could be calculated from task complexity
+      selected.capability,
+      required,
+      0,
     );
 
     return {
-      selectedModel: selectedModel.model,
-      fallbackModels,
-      reason: this.getSelectionReason(agentType, selectedModel, priority),
+      selectedModel: selected.model,
+      fallbackModels: fallbacks,
+      reason: this.getSelectionReason(agentType, selected, priority),
       confidence: ConfidenceCalculator.normalizeToDecimal(confidenceResult.score),
-      estimatedLatency: this.estimateLatency(selectedModel),
-      estimatedCost: this.estimateCost(selectedModel),
+      estimatedLatency: this.estimateLatency(selected),
+      estimatedCost: this.estimateCostPer1k(selected),
+      maxTokens: selected.maxTokens,
+      temperature: selected.temperature,
     };
   }
 
   private getRequiredCapability(agentType: string, taskType?: string): number {
-    // Define required capability based on agent type and task
-    const baseRequirements: Record<string, number> = {
+    const base: Record<string, number> = {
       engineering: 8,
       research: 9,
       marketing: 7,
-      planner: 9,
+      planner: 8,
     };
-    
-    let required = baseRequirements[agentType] || 7;
-    
-    // Adjust based on task complexity if taskType is provided
+    let required = base[agentType] || 7;
     if (taskType) {
-      const complexTasks = ['architecture', 'system_design', 'research_analysis'];
-      if (complexTasks.includes(taskType)) {
+      const complex = ['architecture', 'system_design', 'research_analysis', 'implementation'];
+      if (complex.some((t) => taskType.toLowerCase().includes(t))) {
         required = Math.min(10, required + 1);
       }
     }
-    
     return required;
   }
 
-  private getCandidateModels(agentType: string): ModelRanking[] {
-    const candidates: ModelRanking[] = [];
+  private getCandidateModels(agentType: AgentRole, priority: string): ModelRanking[] {
+    const all = Array.from(this.modelCache.values());
 
-    // Agent-specific model recommendations - prioritize fastest models first
-    switch (agentType) {
-      case 'engineering':
-        candidates.push(
-          this.modelCache.get('minimax/minimax-m2.5:free')!, // Fastest!
-          this.modelCache.get('qwen/qwen3-coder:free')!,
-          this.modelCache.get('deepseek/deepseek-chat-v3.1:free')!,
-          this.modelCache.get('openrouter/auto')!,
-        );
-        break;
-      case 'research':
-        candidates.push(
-          this.modelCache.get('minimax/minimax-m2.5:free')!, // Fastest!
-          this.modelCache.get('qwen/qwen3.6-plus:free')!,
-          this.modelCache.get('deepseek/deepseek-r1:free')!,
-          this.modelCache.get('openrouter/auto')!,
-        );
-        break;
-      case 'marketing':
-        candidates.push(
-          this.modelCache.get('minimax/minimax-m2.5:free')!, // Fastest!
-          this.modelCache.get('qwen/qwen3.6-plus:free')!,
-          this.modelCache.get('deepseek/deepseek-chat-v3.1:free')!,
-          this.modelCache.get('openrouter/auto')!,
-        );
-        break;
-      case 'planner':
-      default:
-        candidates.push(
-          this.modelCache.get('minimax/minimax-m2.5:free')!, // Fastest!
-          this.modelCache.get('deepseek/deepseek-chat-v3.1:free')!,
-          this.modelCache.get('qwen/qwen3.6-plus:free')!,
-          this.modelCache.get('openrouter/auto')!,
-        );
+    // Specialty pool first
+    let pool = all.filter((m) => m.specialties.includes(agentType));
+
+    // Quality mode: include flagships even if not listed specialty
+    if (priority === 'quality') {
+      const flagships = all.filter((m) => m.tier === 'flagship');
+      pool = this.uniqueById([...pool, ...flagships]);
     }
 
-    return candidates.filter((m) => m && m.available);
+    // Cost mode: include budget + workhorse only
+    if (priority === 'cost') {
+      pool = all.filter(
+        (m) =>
+          m.specialties.includes(agentType) &&
+          (m.tier === 'budget' || m.tier === 'workhorse' || m.tier === 'fast'),
+      );
+    }
+
+    // Speed mode: prefer fast/workhorse
+    if (priority === 'speed') {
+      pool = all.filter(
+        (m) =>
+          m.specialties.includes(agentType) &&
+          (m.tier === 'fast' || m.tier === 'workhorse' || m.tier === 'budget'),
+      );
+    }
+
+    // Always allow env default + auto as candidates
+    const envDefault = AGENT_MODELS[agentType as keyof typeof AGENT_MODELS];
+    if (envDefault && this.modelCache.has(envDefault)) {
+      pool = this.uniqueById([this.modelCache.get(envDefault)!, ...pool]);
+    }
+    if (this.modelCache.has('openrouter/auto')) {
+      pool = this.uniqueById([...pool, this.modelCache.get('openrouter/auto')!]);
+    }
+
+    return pool.filter(Boolean);
   }
 
-  private rankModels(models: ModelRanking[], priority: string): ModelRanking[] {
-    const scored = models.map((model) => {
-      let score = 0;
+  private uniqueById(models: ModelRanking[]): ModelRanking[] {
+    const seen = new Set<string>();
+    const out: ModelRanking[] = [];
+    for (const m of models) {
+      if (!m || seen.has(m.model)) continue;
+      seen.add(m.model);
+      out.push(m);
+    }
+    return out;
+  }
 
+  /**
+   * Higher score wins. Balances specialty, quality, cost, and latency.
+   */
+  private rankModels(
+    models: ModelRanking[],
+    priority: string,
+    agentType: AgentRole,
+    required: number,
+  ): ModelRanking[] {
+    const scored = models.map((model) => {
+      const specialtyBonus = model.specialties.includes(agentType) ? 12 : 0;
+      const overkillPenalty =
+        model.capability > required + 2 && priority !== 'quality' ? (model.capability - required) * 1.5 : 0;
+      const blended = (model.promptPrice + model.completionPrice) / 2;
+      const costPenalty = blended * 4; // $ per 1M → score drag
+      const tokenBudgetBonus = model.maxTokens <= 4096 ? 2 : model.maxTokens <= 6144 ? 1 : 0;
+
+      let score = 0;
       switch (priority) {
         case 'speed':
-          score = model.speed * 2 + model.cost * 0.5;
+          score =
+            model.speed * 3 +
+            model.quality * 0.8 +
+            specialtyBonus -
+            costPenalty * 0.3 -
+            overkillPenalty +
+            tokenBudgetBonus;
           break;
         case 'quality':
-          score = model.quality * 2 + model.capability * 1.5;
+          score =
+            model.quality * 3 +
+            model.capability * 2.5 +
+            specialtyBonus -
+            costPenalty * 0.15 -
+            (model.tier === 'budget' ? 8 : 0);
           break;
         case 'cost':
-          // Prioritize cheapest capable model - higher cost = lower score
-          score = model.cost * 2 + model.speed * 0.5;
+          score =
+            (blended <= 0 ? 40 : 25 / (blended + 0.05)) +
+            model.capability * 1.2 +
+            model.speed * 0.8 +
+            specialtyBonus +
+            tokenBudgetBonus -
+            (model.tier === 'flagship' ? 10 : 0);
           break;
         case 'balanced':
         default:
-          // Balanced now prioritizes cost more heavily
-          score = model.quality + model.capability + model.speed * 0.5 + model.cost * 1.5;
+          // Best job-fit per dollar: strong specialty + quality, mild cost, decent speed
+          score =
+            specialtyBonus +
+            model.quality * 1.8 +
+            model.capability * 1.5 +
+            model.speed * 0.9 -
+            costPenalty -
+            overkillPenalty +
+            tokenBudgetBonus +
+            (model.tier === 'workhorse' ? 4 : 0) +
+            (model.tier === 'flagship' ? 1 : 0);
+          break;
       }
 
       return { model, score };
@@ -232,49 +263,44 @@ export class ModelRouter {
     return scored.sort((a, b) => b.score - a.score).map((s) => s.model);
   }
 
-  private getSelectionReason(
-    agentType: string,
-    selectedModel: ModelRanking,
-    priority: string,
-  ): string {
-    const reasons: { [key: string]: string } = {
-      speed: `Selected for fast inference (${selectedModel.speed}/10 speed)`,
-      quality: `Selected for high quality output (${selectedModel.quality}/10 quality, ${selectedModel.capability}/10 capability)`,
-      cost: `Selected for cost efficiency (${selectedModel.cost} tokens/$)`,
-      balanced: `Selected as best balanced option for ${agentType}`,
+  private getSelectionReason(agentType: string, selected: ModelRanking, priority: string): string {
+    const blend = ((selected.promptPrice + selected.completionPrice) / 2).toFixed(2);
+    const map: Record<string, string> = {
+      speed: `${selected.model} for ${agentType} (speed ${selected.speed}/10, ~$${blend}/1M)`,
+      quality: `${selected.model} for ${agentType} (quality ${selected.quality}/10, capability ${selected.capability}/10)`,
+      cost: `${selected.model} for ${agentType} (cost-optimized, ~$${blend}/1M blended)`,
+      balanced: `${selected.model} for ${agentType} (task-fit ${selected.tier}, q${selected.quality}/c${selected.capability}/s${selected.speed}, ~$${blend}/1M)`,
     };
-    return reasons[priority] || reasons['balanced'];
+    return map[priority] || map.balanced;
   }
 
   private estimateLatency(model: ModelRanking): number {
-    // Rough estimate: slower models take longer
-    return Math.round((100 / model.speed) * 100); // ms
+    return Math.round((120 / Math.max(model.speed, 1)) * 100);
   }
 
-  private estimateCost(model: ModelRanking): number {
-    // Cost per 1000 tokens in cents
-    return (1000 / model.cost) * 100;
+  private estimateCostPer1k(model: ModelRanking): number {
+    const blend = (model.promptPrice + model.completionPrice) / 2;
+    return (blend / 1000) * 100; // cents per 1k tokens (legacy field)
   }
 
   async testModelAvailability(model: string): Promise<boolean> {
     try {
-      // Quick test to verify model is available
       const response = await this.openRouterClient.chat(
         model,
         [{ role: 'user', content: 'ping' }],
         'Respond with only: pong',
+        16,
+        0,
       );
       return response.content.toLowerCase().includes('pong');
-    } catch (error) {
+    } catch {
       return false;
     }
   }
 
   updateModelAvailability(model: string, available: boolean): void {
     const ranking = this.modelCache.get(model);
-    if (ranking) {
-      ranking.available = available;
-    }
+    if (ranking) ranking.available = available;
   }
 
   getModelInfo(model: string): ModelRanking | undefined {
@@ -283,5 +309,14 @@ export class ModelRouter {
 
   getAllModels(): ModelRanking[] {
     return Array.from(this.modelCache.values());
+  }
+
+  /** Resolve catalog defaults for a hard-coded override */
+  static defaultsFor(modelId: string): Pick<ModelSelection, 'maxTokens' | 'temperature'> {
+    const entry = getCatalogEntry(modelId);
+    return {
+      maxTokens: entry?.maxTokens ?? 4096,
+      temperature: entry?.temperature ?? 0.4,
+    };
   }
 }

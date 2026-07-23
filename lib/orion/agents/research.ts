@@ -84,19 +84,25 @@ Return ONLY structured markdown analysis. Do NOT include JSON.`;
       
       const systemPrompt = this.getSystemPrompt();
       
-      // Execute using model
-      const response = await this.openRouterClient.chat(
-        this.model,
+      const response = await this.chatForTask(
         [
           {
             role: 'user',
-            content: `User's full objective: ${objective}\n\nTask ID: ${context.taskId}\n\nTask Description: ${context.taskId}\n\nPlease generate a detailed, structured project analysis using the required sections.${target ? `\n\nFocus your analysis on this reference: ${target}` : ''}${framework ? `\n\nUse this framework context: ${framework}` : ''}`,
+            content: `User's full objective: ${objective}
+
+Task ID: ${context.taskId}
+Generate a concise structured project analysis (target ~800-1500 words max).
+${target ? `Focus on reference: ${target}` : ''}
+${framework ? `Framework: ${framework}` : ''}`,
           },
         ],
         systemPrompt,
       );
-      
-      // Store analysis in shared memory for Engineering Agent
+
+      if (response.usage) {
+        this.sharedMemory.set(`task_${context.taskId}_usage`, response.usage);
+      }
+      this.sharedMemory.set(`task_${context.taskId}_model`, this.model);
       this.sharedMemory.set('project_analysis', response.content);
       
       return {

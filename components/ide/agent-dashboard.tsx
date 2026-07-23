@@ -91,10 +91,10 @@ export function AgentDashboard({ plan, state, summary, memory, metrics }: AgentD
 
   const getModelName = (agentId: string): string => {
     const models: Record<string, string> = {
-      planner: 'deepseek/deepseek-chat-v3.1:free',
-      engineering: 'qwen/qwen3-coder:free',
-      research: 'deepseek/deepseek-r1:free',
-      marketing: 'qwen/qwen3.6-plus:free',
+      planner: 'deepseek/deepseek-chat',
+      engineering: 'deepseek/deepseek-chat',
+      research: 'deepseek/deepseek-r1',
+      marketing: 'google/gemini-2.5-flash',
     };
     return models[agentId] || 'openrouter/auto';
   };
