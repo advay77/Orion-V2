@@ -77,8 +77,9 @@ ${projectAnalysisInfo}
 ## PROJECT STRUCTURE CONTRACT (mandatory)
 1. Pick ONE stack and ONE root layout. Never mix flat root files with nested src/ randomly.
 2. Use real relative paths — no invented folders like "generated", no "Component-3.tsx".
-3. Every code fence MUST include a path attribute:
+3. Every code fence MUST include a file path. Prefer path="...". Also accepted: \`\`\`tsx src/App.tsx or \`\`\`src/App.tsx
    \`\`\`tsx path="src/App.tsx"
+   Never emit only a JSON summary — code fences are required or the IDE will be empty.
 4. Prefer these scaffolds (choose the one that matches the objective):
 
 **Static HTML**
@@ -159,8 +160,10 @@ ${taskDescription ? `Task description: ${taskDescription}` : ''}
 ${assignedSkill ? `Assigned skill: ${assignedSkill}` : ''}
 
 Generate a coherent, structured project for this objective.
-Return path-tagged code fences for every file, then a brief JSON summary.
-Do not omit the code fences. Keep output focused — only necessary files.`,
+CRITICAL: Output the actual files as markdown code fences FIRST (with paths), then a brief JSON summary.
+Example fence header: \`\`\`tsx path="src/App.tsx"
+If you only return JSON / prose with no fences, the workspace will have zero files.
+Keep output focused — only necessary files.`,
           },
         ],
         systemPrompt,

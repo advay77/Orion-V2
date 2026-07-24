@@ -1,5 +1,6 @@
 export * from './types';
 export * from './artifact-parser';
+export * from './artifact-gate';
 export * from './project-detector';
 export * from './artifact-normalizer';
 export * from './artifact-validator';

@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import { createOrionSystem, ArtifactEngine, VirtualFileSystem } from '@/lib/orion';
+import {
+  createOrionSystem,
+  ArtifactEngine,
+  VirtualFileSystem,
+  hasExtractableCode,
+  isSkippedTaskResult,
+} from '@/lib/orion';
 import { NextRequest } from 'next/server';
 
 export const runtime = 'nodejs';
@@ -30,11 +36,8 @@ function encodeSSE(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
-function looksLikePathedCode(resultStr: string): boolean {
-  return (
-    /```[\w+#.-]*\s+(?:path|file)\s*=/.test(resultStr) ||
-    /```[\w./-]+\.[a-zA-Z0-9]+/.test(resultStr)
-  );
+function toResultString(result: unknown): string {
+  return typeof result === 'string' ? result : JSON.stringify(result);
 }
 
 export async function POST(request: NextRequest) {
@@ -92,21 +95,36 @@ export async function POST(request: NextRequest) {
 
       for (const task of plan.tasks) {
         if (!task.result) continue;
-        const resultStr =
-          typeof task.result === 'string' ? task.result : JSON.stringify(task.result);
+        const resultStr = toResultString(task.result);
+        if (isSkippedTaskResult(resultStr)) {
+          taskResults[task.id] = {
+            description: task.description,
+            status: task.status,
+            agent: task.assignedTo,
+            result: resultStr.substring(0, 500),
+            fullResult: task.result,
+            artifacts: [],
+            skipped: true,
+          };
+          continue;
+        }
 
+        // Engineering always goes through the parser (pathless fences get stable paths).
+        // Other agents only when output looks like extractable code.
         const shouldProcess =
           task.assignedTo === 'engineering' ||
           (task.assignedTo !== 'research' &&
             task.assignedTo !== 'marketing' &&
-            looksLikePathedCode(resultStr));
+            hasExtractableCode(resultStr));
 
         let engineResult: ReturnType<ArtifactEngine['process']> | null = null;
-        if (shouldProcess && looksLikePathedCode(resultStr)) {
-          engineResult = artifactEngine.process(resultStr);
-          if (engineResult.vfs.size > 0) {
-            if (task.assignedTo === 'engineering') engineResults.unshift(engineResult);
-            else engineResults.push(engineResult);
+        if (shouldProcess) {
+          if (task.assignedTo === 'engineering' || hasExtractableCode(resultStr)) {
+            engineResult = artifactEngine.process(resultStr);
+            if (engineResult.vfs.size > 0) {
+              if (task.assignedTo === 'engineering') engineResults.unshift(engineResult);
+              else engineResults.push(engineResult);
+            }
           }
         }
 
@@ -120,13 +138,34 @@ export async function POST(request: NextRequest) {
         };
       }
 
+      // Fallback: engineering wrote to shared memory but task.result was empty/stripped
+      if (engineResults.length === 0 && typeof memory.engineering_task_result === 'string') {
+        const fallback = String(memory.engineering_task_result);
+        if (hasExtractableCode(fallback) || fallback.includes('```')) {
+          const engineResult = artifactEngine.process(fallback);
+          if (engineResult.vfs.size > 0) {
+            engineResults.push(engineResult);
+            warnings.push('Recovered project files from engineering shared memory fallback.');
+          }
+        }
+      }
+
       let finalResult: ReturnType<ArtifactEngine['merge']> | null = null;
       if (engineResults.length > 0) {
         finalResult = artifactEngine.merge(engineResults);
-      } else if (plan.tasks.some((t) => t.assignedTo === 'engineering' && t.status === 'completed')) {
-        warnings.push(
-          'Engineering completed but no structured files were parsed. Check that the model returned path-tagged code fences.',
+      } else {
+        const engineeringRan = plan.tasks.some(
+          (t) =>
+            t.assignedTo === 'engineering' &&
+            t.status === 'completed' &&
+            t.result &&
+            !isSkippedTaskResult(toResultString(t.result)),
         );
+        if (engineeringRan) {
+          warnings.push(
+            'Engineering completed but no structured files were parsed. Models must return code fences (ideally path-tagged like ```tsx path="src/App.tsx").',
+          );
+        }
       }
 
       const totalCost = taskLogs.reduce(

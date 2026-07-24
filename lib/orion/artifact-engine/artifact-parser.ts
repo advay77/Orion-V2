@@ -144,8 +144,10 @@ export class ArtifactParser {
       return { path, language: this.languageFromPath(path) };
     }
 
-    // lang then path without quotes: ```tsx src/App.tsx
-    const spaced = header.match(/^([\w+#.-]+)\s+([./\w-]+(?:\/[./\w-]+)+\.[a-zA-Z0-9]+)\s*$/);
+    // lang then path without quotes: ```tsx src/App.tsx  OR ```tsx App.tsx
+    const spaced = header.match(
+      /^([\w+#.-]+)\s+([./\w-]+(?:\/[./\w-]+)*\.[a-zA-Z0-9]+)\s*$/,
+    );
     if (spaced) {
       return {
         language: spaced[1].toLowerCase(),

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { normalizeModelSlug, OpenRouterClient } from './openrouter-client';
 import { ArtifactParser } from './artifact-engine/artifact-parser';
 import { ArtifactNormalizer } from './artifact-engine/artifact-normalizer';
+import { ArtifactEngine } from './artifact-engine/artifact-engine';
+import { hasExtractableCode } from './artifact-engine/artifact-gate';
 import { ModelRouter } from './model-router';
 import { getAllFrameworks } from './artifact-engine/frameworks';
 import { ConfidenceCalculator } from './confidence';
@@ -45,6 +47,82 @@ console.log('hi')
 `;
     const artifacts = new ArtifactParser().parse(input);
     expect(artifacts[0]?.path).toBe('src/main.ts');
+  });
+
+  it('accepts lang + path without equals', () => {
+    const input = `
+\`\`\`tsx src/App.tsx
+export default function App() { return null }
+\`\`\`
+`;
+    const artifacts = new ArtifactParser().parse(input);
+    expect(artifacts[0]?.path).toBe('src/App.tsx');
+  });
+
+  it('assigns stable paths to pathless fences', () => {
+    const input = `
+\`\`\`tsx
+export default function App() { return <main>Hi</main> }
+\`\`\`
+
+\`\`\`css
+body { margin: 0 }
+\`\`\`
+
+\`\`\`json
+{ "name": "demo", "private": true }
+\`\`\`
+`;
+    const artifacts = new ArtifactParser().parse(input);
+    expect(artifacts.length).toBe(3);
+    expect(artifacts.map((a) => a.path).sort()).toEqual([
+      'package.json',
+      'src/App.tsx',
+      'src/styles/index.css',
+    ]);
+  });
+});
+
+describe('hasExtractableCode', () => {
+  it('detects pathless fences', () => {
+    expect(
+      hasExtractableCode('```tsx\n console.log(1)\n```'),
+    ).toBe(true);
+  });
+
+  it('detects lang + path form', () => {
+    expect(hasExtractableCode('```tsx src/App.tsx\nexport {}\n```')).toBe(true);
+  });
+
+  it('rejects prose-only', () => {
+    expect(hasExtractableCode('Just a research summary with no code.')).toBe(false);
+  });
+});
+
+describe('ArtifactEngine with pathless engineering output', () => {
+  it('builds a non-empty VFS from pathless fences', () => {
+    const engine = new ArtifactEngine();
+    const result = engine.process(`
+Here is the app:
+
+\`\`\`tsx
+export default function App() { return <h1>Hello</h1> }
+\`\`\`
+
+\`\`\`css
+body { font-family: system-ui; }
+\`\`\`
+
+\`\`\`json
+{ "name": "hello", "private": true }
+\`\`\`
+
+{ "success": true, "result": "done" }
+`);
+    expect(result.vfs.size).toBeGreaterThanOrEqual(2);
+    expect(result.vfs.has('src/App.tsx') || [...result.vfs.keys()].some((k) => k.endsWith('App.tsx'))).toBe(
+      true,
+    );
   });
 });
 
